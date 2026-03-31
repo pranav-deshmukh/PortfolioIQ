@@ -1,0 +1,2159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LPL Advisor Copilot</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap");
+
+      :root {
+        --bg: #0b0f1a;
+        --surface: #111827;
+        --surface2: #1a2236;
+        --border: #1e2d45;
+        --accent: #3b82f6;
+        --accent2: #6366f1;
+        --green: #10b981;
+        --red: #ef4444;
+        --amber: #f59e0b;
+        --text: #e2e8f0;
+        --muted: #64748b;
+        --subtle: #94a3b8;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: "DM Sans", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      /* ── Top bar ─────────────────────────────── */
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 28px;
+        height: 56px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 600;
+        font-size: 15px;
+        letter-spacing: -0.2px;
+      }
+      .logo-icon {
+        width: 30px;
+        height: 30px;
+        background: linear-gradient(135deg, var(--accent), var(--accent2));
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+      }
+      .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--green);
+        border-radius: 50%;
+        box-shadow: 0 0 6px var(--green);
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      .status-text {
+        color: var(--subtle);
+        font-size: 12px;
+      }
+      .refresh-btn {
+        padding: 6px 14px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--subtle);
+        font-family: "DM Sans", sans-serif;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .refresh-btn:hover {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+
+      /* ── Layout ──────────────────────────────── */
+      .layout {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        height: calc(100vh - 56px);
+      }
+      .sidebar {
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        padding: 16px 0;
+        overflow-y: auto;
+      }
+      .main {
+        overflow-y: auto;
+        padding: 24px 28px;
+      }
+
+      /* ── Sidebar ─────────────────────────────── */
+      .sidebar-section {
+        margin-bottom: 20px;
+      }
+      .sidebar-label {
+        padding: 0 16px 8px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 16px;
+        font-size: 13px;
+        color: var(--subtle);
+        cursor: pointer;
+        border-left: 2px solid transparent;
+        transition: all 0.15s;
+        user-select: none;
+      }
+      .nav-item:hover {
+        color: var(--text);
+        background: var(--surface2);
+      }
+      .nav-item.active {
+        color: var(--accent);
+        background: rgba(59, 130, 246, 0.08);
+        border-left-color: var(--accent);
+      }
+      .nav-icon {
+        font-size: 15px;
+        width: 18px;
+        text-align: center;
+      }
+
+      /* ── Views ───────────────────────────────── */
+      .view {
+        display: none;
+      }
+      .view.active {
+        display: block;
+      }
+
+      /* ── Section headers ─────────────────────── */
+      .section-header {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .section-title {
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.3px;
+      }
+      .section-sub {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      /* ── Cards ───────────────────────────────── */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 18px;
+      }
+      .card-title {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 14px;
+      }
+
+      /* ── KPI strip ───────────────────────────── */
+      .kpi-strip {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .kpi {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+      }
+      .kpi-label {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .kpi-value {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+      }
+      .kpi-delta {
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .up {
+        color: var(--green);
+      }
+      .down {
+        color: var(--red);
+      }
+      .neutral {
+        color: var(--amber);
+      }
+
+      /* ── Grid layouts ────────────────────────── */
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .grid-3 {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 16px;
+      }
+
+      /* ── Risk badge ──────────────────────────── */
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .badge-high {
+        background: rgba(239, 68, 68, 0.15);
+        color: #f87171;
+      }
+      .badge-medium {
+        background: rgba(245, 158, 11, 0.15);
+        color: #fbbf24;
+      }
+      .badge-low {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+      }
+      .badge-critical {
+        background: rgba(239, 68, 68, 0.25);
+        color: #ff6b6b;
+        border: 1px solid rgba(239, 68, 68, 0.4);
+      }
+      .badge-bull {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+      }
+      .badge-bear {
+        background: rgba(239, 68, 68, 0.15);
+        color: #f87171;
+      }
+      .badge-mixed {
+        background: rgba(245, 158, 11, 0.15);
+        color: #fbbf24;
+      }
+
+      /* ── Client risk table ───────────────────── */
+      .risk-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .risk-table th {
+        text-align: left;
+        padding: 8px 12px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+      }
+      .risk-table td {
+        padding: 12px 12px;
+        border-bottom: 1px solid rgba(30, 45, 69, 0.5);
+        vertical-align: middle;
+      }
+      .risk-table tr:last-child td {
+        border-bottom: none;
+      }
+      .risk-table tr {
+        transition: background 0.1s;
+        cursor: pointer;
+      }
+      .risk-table tr:hover td {
+        background: var(--surface2);
+      }
+
+      /* ── Score bar ───────────────────────────── */
+      .score-bar-bg {
+        height: 5px;
+        border-radius: 3px;
+        background: var(--border);
+        margin-top: 4px;
+        overflow: hidden;
+      }
+      .score-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.8s ease;
+      }
+
+      /* ── News feed ───────────────────────────── */
+      .news-item {
+        padding: 14px 0;
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .news-item:last-child {
+        border-bottom: none;
+      }
+      .news-item:hover {
+        padding-left: 6px;
+      }
+      .news-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 5px;
+      }
+      .news-time {
+        font-size: 11px;
+        color: var(--muted);
+        font-family: "DM Mono", monospace;
+      }
+      .news-headline {
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+      .news-summary {
+        font-size: 12px;
+        color: var(--subtle);
+        line-height: 1.5;
+      }
+      .news-sectors {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 8px;
+      }
+      .sector-chip {
+        padding: 2px 7px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font-size: 10px;
+        color: var(--subtle);
+        font-family: "DM Mono", monospace;
+      }
+
+      /* ── Chart containers ────────────────────── */
+      .chart-wrap {
+        position: relative;
+      }
+      canvas {
+        max-width: 100%;
+      }
+
+      /* ── Stat row ────────────────────────────── */
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(30, 45, 69, 0.5);
+        font-size: 13px;
+      }
+      .stat-row:last-child {
+        border-bottom: none;
+      }
+      .stat-key {
+        color: var(--subtle);
+      }
+      .stat-val {
+        font-family: "DM Mono", monospace;
+        font-size: 12px;
+      }
+
+      /* ── Stress test items ───────────────────── */
+      .stress-item {
+        padding: 12px;
+        background: var(--surface2);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border: 1px solid var(--border);
+      }
+      .stress-name {
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 3px;
+      }
+      .stress-desc {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .stress-impact {
+        font-family: "DM Mono", monospace;
+        font-size: 15px;
+        font-weight: 500;
+      }
+
+      /* ── Client selector ─────────────────────── */
+      .client-selector {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+      }
+      .client-chip {
+        padding: 6px 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+        color: var(--subtle);
+      }
+      .client-chip.active {
+        background: rgba(59, 130, 246, 0.15);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .client-chip:hover:not(.active) {
+        border-color: var(--subtle);
+        color: var(--text);
+      }
+
+      /* ── Vol table ───────────────────────────── */
+      .vol-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      .vol-card {
+        padding: 10px 12px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .vol-ticker {
+        font-family: "DM Mono", monospace;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .vol-sector {
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .vol-nums {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        margin-top: 5px;
+      }
+      .vol-forecast {
+        font-size: 15px;
+        font-weight: 600;
+        font-family: "DM Mono", monospace;
+      }
+      .vol-hist {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .vol-arrow {
+        font-size: 11px;
+      }
+
+      /* ── Empty state ─────────────────────────── */
+      .empty {
+        text-align: center;
+        padding: 40px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      /* ── Scrollbar ───────────────────────────── */
+      ::-webkit-scrollbar {
+        width: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      /* ── Responsive ──────────────────────────── */
+      @media (max-width: 900px) {
+        .kpi-strip {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .grid-2,
+        .grid-3 {
+          grid-template-columns: 1fr;
+        }
+        .vol-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ── TOP BAR ─────────────────────────────── -->
+    <div class="topbar">
+      <div class="logo">
+        <div class="logo-icon">⚡</div>
+        LPL Advisor Copilot
+      </div>
+      <div class="topbar-right">
+        <div class="status-dot"></div>
+        <span class="status-text">Analytics live · Mar 28, 2025</span>
+        <button class="refresh-btn" onclick="init()">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- ── LAYOUT ──────────────────────────────── -->
+    <div class="layout">
+      <!-- SIDEBAR -->
+      <nav class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-label">Analytics</div>
+          <div
+            class="nav-item active"
+            data-view="overview"
+            onclick="switchView(this)"
+          >
+            <span class="nav-icon">◈</span> Overview
+          </div>
+          <div class="nav-item" data-view="risk" onclick="switchView(this)">
+            <span class="nav-icon">⚠</span> Risk Scoring
+          </div>
+          <div
+            class="nav-item"
+            data-view="volatility"
+            onclick="switchView(this)"
+          >
+            <span class="nav-icon">〰</span> Volatility
+          </div>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Market</div>
+          <div class="nav-item" data-view="news" onclick="switchView(this)">
+            <span class="nav-icon">◎</span> News & Events
+          </div>
+          <div class="nav-item" data-view="stress" onclick="switchView(this)">
+            <span class="nav-icon">⬡</span> Stress Tests
+          </div>
+          <div
+            class="nav-item"
+            data-view="montecarlo"
+            onclick="switchView(this)"
+          >
+            <span class="nav-icon">◇</span> Monte Carlo
+          </div>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Models</div>
+          <div class="nav-item" data-view="models" onclick="switchView(this)">
+            <span class="nav-icon">⬟</span> ML Engines
+          </div>
+        </div>
+      </nav>
+
+      <!-- MAIN -->
+      <main class="main">
+        <!-- ══ OVERVIEW ══════════════════════════ -->
+        <div id="view-overview" class="view active">
+          <div class="section-header">
+            <div class="section-title">Portfolio Overview</div>
+            <div class="section-sub">
+              5 clients · $4.85M AUM · 6 active alerts
+            </div>
+          </div>
+
+          <div class="kpi-strip" id="kpi-strip"></div>
+
+          <div class="grid-2" style="margin-bottom: 16px">
+            <div class="card">
+              <div class="card-title">Client Risk Leaderboard</div>
+              <table class="risk-table" id="overview-table"></table>
+            </div>
+            <div class="card">
+              <div class="card-title">Active News Alerts</div>
+              <div id="overview-news"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Portfolio Value Distribution</div>
+            <div class="chart-wrap" style="height: 180px">
+              <canvas id="chart-overview-bar"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ RISK SCORING ═══════════════════════ -->
+        <div id="view-risk" class="view">
+          <div class="section-header">
+            <div class="section-title">RF Risk Scoring</div>
+            <div class="section-sub">
+              RandomForestRegressor · 12 features · 500-day lookback
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 16px">
+            <div class="card-title">Client Risk Scores</div>
+            <table class="risk-table" id="risk-table-full"></table>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">Feature Importances</div>
+              <div class="chart-wrap" style="height: 220px">
+                <canvas id="chart-feat-imp"></canvas>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Risk Score Distribution</div>
+              <div class="chart-wrap" style="height: 220px">
+                <canvas id="chart-risk-radar"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ VOLATILITY ════════════════════════ -->
+        <div id="view-volatility" class="view">
+          <div class="section-header">
+            <div class="section-title">GARCH Volatility Forecast</div>
+            <div class="section-sub">
+              GARCH(1,1) · 30-day horizon · 500-day training window
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 16px">
+            <div class="card-title">Forecast vs Historical (Annualised %)</div>
+            <div class="chart-wrap" style="height: 240px">
+              <canvas id="chart-vol-compare"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">All Tickers</div>
+            <div class="vol-grid" id="vol-grid"></div>
+          </div>
+        </div>
+
+        <!-- ══ NEWS & EVENTS ═══════════════════════ -->
+        <div id="view-news" class="view">
+          <div class="section-header">
+            <div class="section-title">News & Event Classification</div>
+            <div class="section-sub">
+              GradientBoostingClassifier · 16 training events
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">Event Feed</div>
+              <div id="news-feed"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">Sentiment Distribution</div>
+              <div class="chart-wrap" style="height: 200px">
+                <canvas id="chart-news-donut"></canvas>
+              </div>
+              <div style="margin-top: 16px">
+                <div class="card-title">Alert Levels</div>
+                <div id="alert-breakdown"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ STRESS TESTS ═══════════════════════ -->
+        <div id="view-stress" class="view">
+          <div class="section-header">
+            <div class="section-title">Stress Tests</div>
+            <div class="section-sub">5 historical + hypothetical scenarios</div>
+          </div>
+          <div class="client-selector" id="stress-client-selector"></div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">Scenario Impact</div>
+              <div class="chart-wrap" style="height: 240px">
+                <canvas id="chart-stress-bar"></canvas>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Scenario Breakdown</div>
+              <div id="stress-detail"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ MONTE CARLO ════════════════════════ -->
+        <div id="view-montecarlo" class="view">
+          <div class="section-header">
+            <div class="section-title">Monte Carlo Simulation</div>
+            <div class="section-sub">
+              1,000 paths · Log-normal returns · Correlated factors
+            </div>
+          </div>
+          <div class="client-selector" id="mc-client-selector"></div>
+          <div class="grid-2" style="margin-bottom: 16px">
+            <div class="card">
+              <div class="card-title">Terminal Value Distribution</div>
+              <div class="chart-wrap" style="height: 240px">
+                <canvas id="chart-mc-hist"></canvas>
+              </div>
+            </div>
+            <div class="card" id="mc-stats">
+              <div class="card-title">Simulation Statistics</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Percentile Outcomes</div>
+            <div class="chart-wrap" style="height: 160px">
+              <canvas id="chart-mc-percentiles"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ ML ENGINES ══════════════════════════ -->
+        <div id="view-models" class="view">
+          <div class="section-header">
+            <div class="section-title">ML Engine Summary</div>
+            <div class="section-sub">
+              Python · scikit-learn · arch · 3 active models
+            </div>
+          </div>
+          <div class="grid-3">
+            <div class="card">
+              <div class="card-title">Model 1 · GARCH</div>
+              <div class="stat-row">
+                <span class="stat-key">Type</span
+                ><span class="stat-val">GARCH(1,1)</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Library</span
+                ><span class="stat-val">arch</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Horizon</span
+                ><span class="stat-val">30 days</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Tickers</span
+                ><span class="stat-val">15</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Training</span
+                ><span class="stat-val">500 days</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Output</span
+                ><span class="stat-val">Ann. vol %</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Model 2 · Event Classifier</div>
+              <div class="stat-row">
+                <span class="stat-key">Type</span
+                ><span class="stat-val">GradientBoosting</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Library</span
+                ><span class="stat-val">scikit-learn</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Classes</span
+                ><span class="stat-val">Bullish/Bearish/Mixed</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Features</span
+                ><span class="stat-val">16 (NLP + meta)</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Training</span
+                ><span class="stat-val">16 events</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Output</span
+                ><span class="stat-val">Label + confidence</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Model 3 · Risk Scorer</div>
+              <div class="stat-row">
+                <span class="stat-key">Type</span
+                ><span class="stat-val">RandomForest</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Library</span
+                ><span class="stat-val">scikit-learn</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Estimators</span
+                ><span class="stat-val">100 trees</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Features</span
+                ><span class="stat-val">12 portfolio metrics</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Clients</span
+                ><span class="stat-val">5</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-key">Output</span
+                ><span class="stat-val">Score 0–100</span>
+              </div>
+            </div>
+          </div>
+          <div class="grid-2" style="margin-top: 16px">
+            <div class="card">
+              <div class="card-title">Architecture Flow</div>
+              <div
+                style="
+                  padding: 8px 0;
+                  font-size: 12px;
+                  color: var(--subtle);
+                  line-height: 2;
+                "
+              >
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 6px 10px;
+                    background: var(--surface2);
+                    border-radius: 6px;
+                    margin-bottom: 6px;
+                  "
+                >
+                  <span style="color: var(--accent)">①</span>
+                  <strong style="color: var(--text)">Data Layer</strong> —
+                  Market returns, news, portfolio holdings (JS)
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 6px 10px;
+                    background: var(--surface2);
+                    border-radius: 6px;
+                    margin-bottom: 6px;
+                  "
+                >
+                  <span style="color: var(--accent)">②</span>
+                  <strong style="color: var(--text)">ML Engine</strong> — GARCH,
+                  GBM classifier, RandomForest (Python)
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 6px 10px;
+                    background: var(--surface2);
+                    border-radius: 6px;
+                    margin-bottom: 6px;
+                  "
+                >
+                  <span style="color: var(--accent)">③</span>
+                  <strong style="color: var(--text)">Quant Engine</strong> —
+                  VaR, Stress Tests, Monte Carlo (JS)
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 6px 10px;
+                    background: var(--surface2);
+                    border-radius: 6px;
+                  "
+                >
+                  <span style="color: var(--accent)">④</span>
+                  <strong style="color: var(--text)">Dashboard</strong> —
+                  Advisor copilot UI (this page)
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Quant Engines</div>
+              <div style="padding: 4px 0">
+                <div class="stat-row">
+                  <span class="stat-key">VaR</span
+                  ><span class="stat-val">Historical · 95% / 99%</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-key">CVaR</span
+                  ><span class="stat-val">Expected Shortfall</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-key">Stress</span
+                  ><span class="stat-val">5 scenarios (2008, COVID…)</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-key">Monte Carlo</span
+                  ><span class="stat-val">1000 paths, log-normal</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-key">Lookback</span
+                  ><span class="stat-val">500 trading days</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- ══════════════════════════════════════════
+     INLINE DATA (mirrors Python output)
+═══════════════════════════════════════════ -->
+    <script>
+      // ── Raw data from sampleData.js + analytics_engine.py ──────────
+      const CLIENTS = [
+        {
+          client_id: "C001",
+          name: "Robert & Linda Chen",
+          age: 58,
+          portfolio_value: 1000000,
+          risk_tolerance: "moderate",
+          time_horizon_years: 10,
+          holdings: {
+            MSFT: 0.1,
+            AAPL: 0.08,
+            NVDA: 0.05,
+            JPM: 0.08,
+            XOM: 0.1,
+            CVX: 0.05,
+            JNJ: 0.07,
+            AGG: 0.2,
+            BND: 0.05,
+            VEA: 0.1,
+            CASH: 0.12,
+          },
+        },
+        {
+          client_id: "C002",
+          name: "Sarah Mitchell",
+          age: 42,
+          portfolio_value: 550000,
+          risk_tolerance: "aggressive",
+          time_horizon_years: 20,
+          holdings: {
+            MSFT: 0.18,
+            AAPL: 0.15,
+            NVDA: 0.12,
+            AMZN: 0.1,
+            JPM: 0.08,
+            BAC: 0.07,
+            JNJ: 0.05,
+            AGG: 0.1,
+            VEA: 0.1,
+            CASH: 0.05,
+          },
+        },
+        {
+          client_id: "C003",
+          name: "James & Patricia Wong",
+          age: 68,
+          portfolio_value: 2200000,
+          risk_tolerance: "conservative",
+          time_horizon_years: 5,
+          holdings: {
+            MSFT: 0.05,
+            JPM: 0.08,
+            BAC: 0.05,
+            XOM: 0.05,
+            JNJ: 0.1,
+            PFE: 0.08,
+            AGG: 0.28,
+            BND: 0.12,
+            GLD: 0.07,
+            VEA: 0.05,
+            CASH: 0.07,
+          },
+        },
+        {
+          client_id: "C004",
+          name: "Marcus Johnson",
+          age: 35,
+          portfolio_value: 220000,
+          risk_tolerance: "aggressive",
+          time_horizon_years: 30,
+          holdings: {
+            MSFT: 0.2,
+            AAPL: 0.18,
+            NVDA: 0.18,
+            AMZN: 0.15,
+            JPM: 0.1,
+            XOM: 0.05,
+            AGG: 0.07,
+            CASH: 0.07,
+          },
+        },
+        {
+          client_id: "C005",
+          name: "Eleanor & Frank Navarro",
+          age: 63,
+          portfolio_value: 875000,
+          risk_tolerance: "moderate",
+          time_horizon_years: 8,
+          holdings: {
+            MSFT: 0.08,
+            AAPL: 0.07,
+            JPM: 0.08,
+            BAC: 0.05,
+            XOM: 0.08,
+            CVX: 0.07,
+            JNJ: 0.08,
+            PFE: 0.05,
+            AGG: 0.15,
+            BND: 0.08,
+            GLD: 0.05,
+            VEA: 0.08,
+            CASH: 0.08,
+          },
+        },
+      ];
+
+      const TICKERS = {
+        MSFT: { sector: "tech", beta: 1.15 },
+        AAPL: { sector: "tech", beta: 1.1 },
+        NVDA: { sector: "tech", beta: 1.6 },
+        AMZN: { sector: "tech", beta: 1.2 },
+        JPM: { sector: "financials", beta: 1.1 },
+        BAC: { sector: "financials", beta: 1.3 },
+        XOM: { sector: "energy", beta: 0.9 },
+        CVX: { sector: "energy", beta: 0.85 },
+        JNJ: { sector: "healthcare", beta: 0.65 },
+        PFE: { sector: "healthcare", beta: 0.75 },
+        AGG: { sector: "bonds", beta: 0.1 },
+        BND: { sector: "bonds", beta: 0.08 },
+        GLD: { sector: "commodities", beta: 0.05 },
+        VEA: { sector: "international", beta: 0.8 },
+        CASH: { sector: "cash", beta: 0.0 },
+      };
+
+      const NEWS_EVENTS = [
+        {
+          id: "N001",
+          date: "Mar 20",
+          headline: "Fed holds rates at 5.25%, signals 2 cuts in 2025",
+          category: "macro",
+          predicted_sentiment: "BULLISH",
+          confidence: 100,
+          severity: "high",
+          affected_sectors: ["bonds", "financials", "tech"],
+          alert_level: "HIGH",
+          summary:
+            "Federal Reserve kept rates steady and signaled two 25bp cuts later this year, citing cooling inflation and stable labor markets.",
+        },
+        {
+          id: "N002",
+          date: "Mar 22",
+          headline:
+            "NVIDIA beats earnings by 18%, raises guidance on AI demand",
+          category: "earnings",
+          predicted_sentiment: "BULLISH",
+          confidence: 100,
+          severity: "high",
+          affected_sectors: ["tech"],
+          alert_level: "HIGH",
+          summary:
+            "NVIDIA reported record quarterly revenue driven by datacenter AI chip demand. Analysts raised 12-month targets by 20%.",
+        },
+        {
+          id: "N003",
+          date: "Mar 24",
+          headline:
+            "Oil surges 11% after OPEC+ announces surprise production cut",
+          category: "geopolitical",
+          predicted_sentiment: "MIXED/NEUTRAL",
+          confidence: 100,
+          severity: "high",
+          affected_sectors: ["energy", "bonds", "tech"],
+          alert_level: "HIGH",
+          summary:
+            "OPEC+ unexpectedly cut production by 1.5M barrels/day, pushing WTI crude above $95. Inflation expectations ticked up.",
+        },
+        {
+          id: "N004",
+          date: "Mar 25",
+          headline:
+            "Semiconductor tariffs expanded to 35% — China trade tensions escalate",
+          category: "policy",
+          predicted_sentiment: "BEARISH",
+          confidence: 100,
+          severity: "high",
+          affected_sectors: ["tech"],
+          alert_level: "HIGH",
+          summary:
+            "White House expanded semiconductor export controls and raised tariffs. Supply chain disruption risk elevated.",
+        },
+        {
+          id: "N005",
+          date: "Mar 26",
+          headline:
+            "JPMorgan Q1 earnings miss estimates, NIM compression flagged",
+          category: "earnings",
+          predicted_sentiment: "BEARISH",
+          confidence: 100,
+          severity: "medium",
+          affected_sectors: ["financials"],
+          alert_level: "MEDIUM",
+          summary:
+            "JPMorgan Q1 net interest income fell 4% YoY as deposit repricing lagged. CEO flagged rate sensitivity risk.",
+        },
+        {
+          id: "N006",
+          date: "Mar 27",
+          headline: "10Y Treasury yields spike to 4.85% on strong jobs report",
+          category: "macro",
+          predicted_sentiment: "BEARISH",
+          confidence: 100,
+          severity: "medium",
+          affected_sectors: ["bonds", "tech"],
+          alert_level: "MEDIUM",
+          summary:
+            "Nonfarm payrolls added 312K jobs vs 220K expected. June cut probability fell from 68% to 34%.",
+        },
+      ];
+
+      // ML results from Python
+      const ML_RISK_SCORES = [
+        {
+          client_id: "C004",
+          name: "Marcus Johnson",
+          risk_score: 67.9,
+          risk_level: "HIGH",
+          portfolio_beta: 1.058,
+          annualized_vol: 15.17,
+          max_drawdown_pct: 23.1,
+          sharpe_ratio: -0.686,
+          tech_exposure_pct: 71.0,
+          bond_exposure_pct: 7.0,
+          top_risk_drivers: [
+            "High tech concentration (71%)",
+            "Significant drawdown history (23.1%)",
+            "Low bond allocation (7%)",
+          ],
+        },
+        {
+          client_id: "C002",
+          name: "Sarah Mitchell",
+          risk_score: 66.5,
+          risk_level: "HIGH",
+          portfolio_beta: 0.986,
+          annualized_vol: 14.07,
+          max_drawdown_pct: 22.25,
+          sharpe_ratio: -0.734,
+          tech_exposure_pct: 55.0,
+          bond_exposure_pct: 10.0,
+          top_risk_drivers: [
+            "High tech concentration (55%)",
+            "Significant drawdown history (22.2%)",
+          ],
+        },
+        {
+          client_id: "C001",
+          name: "Robert & Linda Chen",
+          risk_score: 47.2,
+          risk_level: "MEDIUM",
+          portfolio_beta: 0.653,
+          annualized_vol: 9.67,
+          max_drawdown_pct: 17.83,
+          sharpe_ratio: -0.996,
+          tech_exposure_pct: 23.0,
+          bond_exposure_pct: 25.0,
+          top_risk_drivers: ["Significant drawdown history (17.8%)"],
+        },
+        {
+          client_id: "C005",
+          name: "Eleanor & Frank Navarro",
+          risk_score: 46.9,
+          risk_level: "MEDIUM",
+          portfolio_beta: 0.631,
+          annualized_vol: 9.21,
+          max_drawdown_pct: 19.31,
+          sharpe_ratio: -1.137,
+          tech_exposure_pct: 15.0,
+          bond_exposure_pct: 23.0,
+          top_risk_drivers: ["Significant drawdown history (19.3%)"],
+        },
+        {
+          client_id: "C003",
+          name: "James & Patricia Wong",
+          risk_score: 44.0,
+          risk_level: "MEDIUM",
+          portfolio_beta: 0.462,
+          annualized_vol: 7.48,
+          max_drawdown_pct: 18.73,
+          sharpe_ratio: -1.263,
+          tech_exposure_pct: 5.0,
+          bond_exposure_pct: 40.0,
+          top_risk_drivers: [
+            "Significant drawdown history (18.7%)",
+            "Short time horizon (5y)",
+          ],
+        },
+      ];
+
+      const ML_VOL = {
+        MSFT: { hist: 19.04, forecast: 19.09, trend: "RISING", change: 0.3 },
+        AAPL: { hist: 16.5, forecast: 19.36, trend: "RISING", change: 17.3 },
+        NVDA: { hist: 24.11, forecast: 23.92, trend: "FALLING", change: -0.8 },
+        AMZN: { hist: 18.88, forecast: 19.79, trend: "RISING", change: 4.8 },
+        JPM: { hist: 16.79, forecast: 17.92, trend: "RISING", change: 6.7 },
+        BAC: { hist: 19.54, forecast: 20.23, trend: "RISING", change: 3.5 },
+        XOM: { hist: 12.78, forecast: 16.53, trend: "RISING", change: 29.4 },
+        CVX: { hist: 16.03, forecast: 15.47, trend: "FALLING", change: -3.5 },
+        JNJ: { hist: 11.8, forecast: 14.06, trend: "RISING", change: 19.1 },
+        PFE: { hist: 13.31, forecast: 14.74, trend: "RISING", change: 10.7 },
+        AGG: { hist: 9.36, forecast: 10.46, trend: "RISING", change: 11.8 },
+        BND: { hist: 8.69, forecast: 10.67, trend: "RISING", change: 22.9 },
+        GLD: { hist: 9.0, forecast: 10.07, trend: "RISING", change: 11.8 },
+        VEA: { hist: 14.32, forecast: 16.24, trend: "RISING", change: 13.4 },
+        CASH: { hist: 9.15, forecast: 10.62, trend: "RISING", change: 16.0 },
+      };
+
+      const ML_FEAT_IMP = {
+        risk_tolerance: 0.1195,
+        age_factor: 0.1194,
+        max_drawdown: 0.1187,
+        portfolio_beta: 0.1093,
+        horizon_factor: 0.0918,
+        daily_volatility: 0.089,
+        tech_exposure: 0.0872,
+        bond_exposure: 0.0831,
+        sharpe_ratio: 0.082,
+      };
+
+      const FEATURE_IMPORTANCES_DISPLAY = [
+        { name: "Risk Tolerance", val: 11.95 },
+        { name: "Age Factor", val: 11.94 },
+        { name: "Max Drawdown", val: 11.87 },
+        { name: "Portfolio Beta", val: 10.93 },
+        { name: "Time Horizon", val: 9.18 },
+      ];
+
+      // ── Seeded PRNG ────────────────────────────────────────────────
+      function seededRand(seed) {
+        let s = seed;
+        return () => {
+          s = (s * 16807) % 2147483647;
+          return (s - 1) / 2147483646;
+        };
+      }
+
+      // ── Generate market returns ─────────────────────────────────────
+      function generateMarketReturns() {
+        const rand = seededRand(1337);
+        const days = 500;
+        const tickers = Object.keys(TICKERS);
+        const returns = {};
+        const mkt = Array.from({ length: days }, () => (rand() - 0.5) * 0.018);
+        tickers.forEach((t) => {
+          const beta = TICKERS[t].beta;
+          returns[t] = mkt.map((m, i) => {
+            let r = beta * m + (rand() - 0.5) * 0.012;
+            if (i >= 200 && i < 260) r -= 0.003 + rand() * 0.002;
+            if (i >= 380 && i < 420) r += (rand() - 0.5) * 0.025;
+            if (i === 150 && ["MSFT", "AAPL", "NVDA", "AMZN"].includes(t))
+              r -= 0.045 + rand() * 0.02;
+            if (i === 300 && ["XOM", "CVX"].includes(t))
+              r += 0.06 + rand() * 0.02;
+            return r;
+          });
+        });
+        return returns;
+      }
+
+      function portReturns(client, mktR) {
+        const n = 500;
+        return Array.from({ length: n }, (_, i) => {
+          let r = 0;
+          for (const [t, w] of Object.entries(client.holdings))
+            r += w * (mktR[t]?.[i] ?? 0);
+          return r;
+        });
+      }
+
+      // ── VaR ────────────────────────────────────────────────────────
+      function computeVaR(returns, value) {
+        const sorted = [...returns].sort((a, b) => a - b);
+        const n = sorted.length;
+        const i95 = Math.floor(n * 0.05),
+          i99 = Math.floor(n * 0.01);
+        const var95 = -sorted[i95] * value,
+          var99 = -sorted[i99] * value;
+        const tail = sorted.slice(0, i95);
+        const cvar95 = tail.length
+          ? -(tail.reduce((s, r) => s + r, 0) / tail.length) * value
+          : var95;
+        return {
+          var95: Math.round(var95),
+          var99: Math.round(var99),
+          cvar95: Math.round(cvar95),
+          worst: {
+            pct: (sorted[0] * 100).toFixed(2),
+            dollar: Math.round(sorted[0] * value),
+          },
+          best: {
+            pct: (sorted[n - 1] * 100).toFixed(2),
+            dollar: Math.round(sorted[n - 1] * value),
+          },
+        };
+      }
+
+      // ── Stress Tests ───────────────────────────────────────────────
+      const STRESS_SCENARIOS = {
+        "2008 Financial Crisis": {
+          desc: "Lehman collapse, S&P -57%",
+          shocks: {
+            tech: -0.52,
+            financials: -0.68,
+            energy: -0.45,
+            healthcare: -0.22,
+            bonds: 0.08,
+            commodities: 0.05,
+            international: -0.55,
+            cash: 0.0,
+          },
+        },
+        "2020 COVID Crash": {
+          desc: "Fastest bear market in history, -34%",
+          shocks: {
+            tech: -0.22,
+            financials: -0.4,
+            energy: -0.52,
+            healthcare: -0.18,
+            bonds: 0.06,
+            commodities: -0.35,
+            international: -0.32,
+            cash: 0.0,
+          },
+        },
+        "2022 Rate Shock": {
+          desc: "Fed hikes 425bp — worst bond year",
+          shocks: {
+            tech: -0.38,
+            financials: -0.15,
+            energy: 0.58,
+            healthcare: -0.05,
+            bonds: -0.16,
+            commodities: 0.22,
+            international: -0.2,
+            cash: 0.02,
+          },
+        },
+        "Oil Spike +30%": {
+          desc: "OPEC+ surprise cut + supply shock",
+          shocks: {
+            tech: -0.06,
+            financials: -0.04,
+            energy: 0.22,
+            healthcare: 0.0,
+            bonds: -0.03,
+            commodities: 0.18,
+            international: -0.04,
+            cash: 0.0,
+          },
+        },
+        "Tech Selloff -25%": {
+          desc: "AI bubble deflation / antitrust",
+          shocks: {
+            tech: -0.25,
+            financials: -0.05,
+            energy: 0.02,
+            healthcare: 0.03,
+            bonds: 0.04,
+            commodities: 0.0,
+            international: -0.08,
+            cash: 0.0,
+          },
+        },
+      };
+
+      function runStress(client) {
+        return Object.entries(STRESS_SCENARIOS).map(([name, sc]) => {
+          let impact = 0;
+          for (const [t, w] of Object.entries(client.holdings)) {
+            const sec = TICKERS[t]?.sector ?? "cash";
+            impact += w * (sc.shocks[sec] ?? 0);
+          }
+          return {
+            scenario: name,
+            desc: sc.desc,
+            impact_pct: (impact * 100).toFixed(2),
+            dollar: Math.round(impact * client.portfolio_value),
+            severity:
+              impact < -0.25
+                ? "SEVERE"
+                : impact < -0.1
+                  ? "HIGH"
+                  : impact < -0.05
+                    ? "MEDIUM"
+                    : "LOW",
+          };
+        });
+      }
+
+      // ── Monte Carlo ────────────────────────────────────────────────
+      function makeRng(seed) {
+        let s = seed;
+        const r01 = () => {
+          s = (s * 16807) % 2147483647;
+          return (s - 1) / 2147483646;
+        };
+        return () => {
+          const u = r01(),
+            v = r01();
+          return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+        };
+      }
+      function runMC(returns, value, years, n = 1000) {
+        const days = years * 252;
+        const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+        const std = Math.sqrt(
+          returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length,
+        );
+        const drift = mean - (std * std) / 2;
+        const rng = makeRng(9999);
+        const terms = [];
+        for (let i = 0; i < n; i++) {
+          let v = value;
+          for (let d = 0; d < days; d++) v *= Math.exp(drift + std * rng());
+          terms.push(Math.round(v));
+        }
+        terms.sort((a, b) => a - b);
+        const pct = (p) => terms[Math.floor((n * p) / 100)];
+        // histogram
+        const min = terms[0],
+          max = terms[n - 1],
+          B = 16,
+          bs = (max - min) / B;
+        const hist = Array.from({ length: B }, (_, i) => {
+          const lo = min + i * bs,
+            hi = lo + bs;
+          return {
+            lo: Math.round(lo),
+            hi: Math.round(hi),
+            count: terms.filter((v) => v >= lo && v < hi).length,
+          };
+        });
+        return {
+          p10: pct(10),
+          p25: pct(25),
+          median: pct(50),
+          p75: pct(75),
+          p90: pct(90),
+          mean: Math.round(terms.reduce((s, v) => s + v, 0) / n),
+          worst: terms[0],
+          best: terms[n - 1],
+          prob_pos: ((terms.filter((v) => v > value).length / n) * 100).toFixed(
+            1,
+          ),
+          annual_ret: ((Math.pow(1 + mean, 252) - 1) * 100).toFixed(2),
+          annual_vol: (std * Math.sqrt(252) * 100).toFixed(2),
+          starting: value,
+          years,
+          hist,
+        };
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // RENDER FUNCTIONS
+      // ─────────────────────────────────────────────────────────────────
+      const mktR = generateMarketReturns();
+      const allPortRets = {};
+      CLIENTS.forEach((c) => (allPortRets[c.client_id] = portReturns(c, mktR)));
+
+      const charts = {};
+      function destroyChart(id) {
+        if (charts[id]) {
+          charts[id].destroy();
+          delete charts[id];
+        }
+      }
+
+      function fmt$(n) {
+        if (Math.abs(n) >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
+        if (Math.abs(n) >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
+        return "$" + n.toLocaleString();
+      }
+      function riskColor(level) {
+        return level === "HIGH" || level === "SEVERE"
+          ? "#ef4444"
+          : level === "MEDIUM"
+            ? "#f59e0b"
+            : "#10b981";
+      }
+      function sentimentBadge(s) {
+        if (s === "BULLISH")
+          return '<span class="badge badge-bull">BULLISH</span>';
+        if (s === "BEARISH")
+          return '<span class="badge badge-bear">BEARISH</span>';
+        return '<span class="badge badge-mixed">MIXED</span>';
+      }
+      function levelBadge(l) {
+        const cls =
+          l === "HIGH" || l === "SEVERE"
+            ? "badge-high"
+            : l === "MEDIUM"
+              ? "badge-medium"
+              : "badge-low";
+        return `<span class="badge ${cls}">${l}</span>`;
+      }
+      function scoreBarColor(s) {
+        return s >= 65 ? "#ef4444" : s >= 45 ? "#f59e0b" : "#10b981";
+      }
+
+      // ── Overview ─────────────────────────────────────────────────────
+      function renderOverview() {
+        const totalAUM = CLIENTS.reduce((s, c) => s + c.portfolio_value, 0);
+        const highRisk = ML_RISK_SCORES.filter(
+          (c) => c.risk_level === "HIGH",
+        ).length;
+        const avgScore = (
+          ML_RISK_SCORES.reduce((s, c) => s + c.risk_score, 0) /
+          ML_RISK_SCORES.length
+        ).toFixed(1);
+        const highAlerts = NEWS_EVENTS.filter(
+          (e) => e.alert_level === "HIGH",
+        ).length;
+
+        document.getElementById("kpi-strip").innerHTML = `
+    <div class="kpi"><div class="kpi-label">Total AUM</div><div class="kpi-value">${fmt$(totalAUM)}</div><div class="kpi-delta neutral">5 clients</div></div>
+    <div class="kpi"><div class="kpi-label">High Risk Clients</div><div class="kpi-value down">${highRisk}</div><div class="kpi-delta down">of ${CLIENTS.length} total</div></div>
+    <div class="kpi"><div class="kpi-label">Avg Risk Score</div><div class="kpi-value neutral">${avgScore}<span style="font-size:13px;color:var(--muted)">/100</span></div><div class="kpi-delta">RF Model</div></div>
+    <div class="kpi"><div class="kpi-label">Active Alerts</div><div class="kpi-value down">${highAlerts}</div><div class="kpi-delta down">HIGH severity</div></div>
+  `;
+
+        // Table
+        const riskMap = {};
+        ML_RISK_SCORES.forEach((r) => (riskMap[r.client_id] = r));
+        document.getElementById("overview-table").innerHTML = `
+    <thead><tr><th>Client</th><th>AUM</th><th>Risk Score</th><th>Level</th></tr></thead>
+    <tbody>${CLIENTS.map((c) => {
+      const r = riskMap[c.client_id];
+      return `<tr onclick="switchToClient('${c.client_id}')">
+        <td><div style="font-weight:500">${c.name}</div><div style="font-size:11px;color:var(--muted)">${c.profile || ""} · ${c.risk_tolerance}</div></td>
+        <td><div style="font-family:'DM Mono',monospace">${fmt$(c.portfolio_value)}</div></td>
+        <td>
+          <div style="font-family:'DM Mono',monospace;font-size:13px;color:${scoreBarColor(r.risk_score)}">${r.risk_score}</div>
+          <div class="score-bar-bg" style="width:90px"><div class="score-bar-fill" style="width:${r.risk_score}%;background:${scoreBarColor(r.risk_score)}"></div></div>
+        </td>
+        <td>${levelBadge(r.risk_level)}</td>
+      </tr>`;
+    }).join("")}</tbody>
+  `;
+
+        // News (top 4)
+        document.getElementById("overview-news").innerHTML = NEWS_EVENTS.slice(
+          0,
+          4,
+        )
+          .map(
+            (e) => `
+    <div class="news-item">
+      <div class="news-meta">
+        ${sentimentBadge(e.predicted_sentiment)}
+        ${levelBadge(e.alert_level)}
+        <span class="news-time">${e.date}</span>
+      </div>
+      <div class="news-headline">${e.headline}</div>
+    </div>
+  `,
+          )
+          .join("");
+
+        // Bar chart
+        destroyChart("overview-bar");
+        const ctx = document
+          .getElementById("chart-overview-bar")
+          .getContext("2d");
+        charts["overview-bar"] = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: CLIENTS.map(
+              (c) =>
+                c.name.split(" ")[0] +
+                (c.name.split(" ").length > 2
+                  ? " " + c.name.split(" ").slice(-1)[0]
+                  : ""),
+            ),
+            datasets: [
+              {
+                label: "Portfolio Value",
+                data: CLIENTS.map((c) => c.portfolio_value / 1000),
+                backgroundColor: CLIENTS.map((c) => {
+                  const r = riskMap[c.client_id];
+                  return r.risk_level === "HIGH"
+                    ? "rgba(239,68,68,0.6)"
+                    : "rgba(59,130,246,0.6)";
+                }),
+                borderRadius: 5,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", font: { family: "DM Sans" } },
+              },
+              y: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", callback: (v) => "$" + v + "K" },
+              },
+            },
+          },
+        });
+      }
+
+      // ── Risk Scoring ────────────────────────────────────────────────
+      function renderRisk() {
+        document.getElementById("risk-table-full").innerHTML = `
+    <thead><tr><th>Client</th><th>Score</th><th>β</th><th>Ann. Vol</th><th>Max DD</th><th>Tech %</th><th>Drivers</th></tr></thead>
+    <tbody>${ML_RISK_SCORES.map(
+      (r) => `<tr>
+      <td><div style="font-weight:500">${r.name}</div><div style="font-size:11px;color:var(--muted)">${levelBadge(r.risk_level)}</div></td>
+      <td><div style="font-family:'DM Mono',monospace;font-size:15px;color:${scoreBarColor(r.risk_score)}">${r.risk_score}</div><div class="score-bar-bg" style="width:70px"><div class="score-bar-fill" style="width:${r.risk_score}%;background:${scoreBarColor(r.risk_score)}"></div></div></td>
+      <td style="font-family:'DM Mono',monospace">${r.portfolio_beta}</td>
+      <td style="font-family:'DM Mono',monospace">${r.annualized_vol}%</td>
+      <td style="font-family:'DM Mono',monospace;color:var(--red)">-${r.max_drawdown_pct}%</td>
+      <td style="font-family:'DM Mono',monospace">${r.tech_exposure_pct}%</td>
+      <td style="font-size:11px;color:var(--subtle);max-width:180px">${r.top_risk_drivers[0] || "—"}</td>
+    </tr>`,
+    ).join("")}</tbody>
+  `;
+
+        // Feature importance bar
+        destroyChart("feat-imp");
+        const ctx1 = document.getElementById("chart-feat-imp").getContext("2d");
+        charts["feat-imp"] = new Chart(ctx1, {
+          type: "bar",
+          data: {
+            labels: FEATURE_IMPORTANCES_DISPLAY.map((f) => f.name),
+            datasets: [
+              {
+                data: FEATURE_IMPORTANCES_DISPLAY.map((f) => f.val),
+                backgroundColor: "rgba(99,102,241,0.7)",
+                borderRadius: 4,
+              },
+            ],
+          },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", callback: (v) => v + "%" },
+              },
+              y: {
+                grid: { display: false },
+                ticks: { color: "#94a3b8", font: { size: 11 } },
+              },
+            },
+          },
+        });
+
+        // Risk radar
+        destroyChart("risk-radar");
+        const ctx2 = document
+          .getElementById("chart-risk-radar")
+          .getContext("2d");
+        charts["risk-radar"] = new Chart(ctx2, {
+          type: "radar",
+          data: {
+            labels: [
+              "Risk Score",
+              "Beta",
+              "Ann.Vol",
+              "Max DD",
+              "Tech Exp",
+              "Bond Exp",
+            ],
+            datasets: ML_RISK_SCORES.map((r, i) => ({
+              label: r.name.split(" ")[0],
+              data: [
+                (r.risk_score / 100) * 100,
+                r.portfolio_beta * 60,
+                r.annualized_vol * 3.5,
+                r.max_drawdown_pct * 3,
+                r.tech_exposure_pct,
+                r.bond_exposure_pct,
+              ],
+              borderColor: [
+                "#3b82f6",
+                "#10b981",
+                "#f59e0b",
+                "#ef4444",
+                "#6366f1",
+              ][i],
+              backgroundColor: [
+                "rgba(59,130,246,0.05)",
+                "rgba(16,185,129,0.05)",
+                "rgba(245,158,11,0.05)",
+                "rgba(239,68,68,0.05)",
+                "rgba(99,102,241,0.05)",
+              ][i],
+              pointRadius: 3,
+              borderWidth: 2,
+            })),
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { labels: { color: "#64748b", font: { size: 10 } } },
+            },
+            scales: {
+              r: {
+                grid: { color: "rgba(30,45,69,0.8)" },
+                pointLabels: { color: "#94a3b8", font: { size: 10 } },
+                ticks: { display: false },
+              },
+            },
+          },
+        });
+      }
+
+      // ── Volatility ────────────────────────────────────────────────
+      function renderVolatility() {
+        const tickers = Object.keys(ML_VOL);
+        destroyChart("vol-compare");
+        const ctx = document
+          .getElementById("chart-vol-compare")
+          .getContext("2d");
+        charts["vol-compare"] = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: tickers,
+            datasets: [
+              {
+                label: "Historical Vol",
+                data: tickers.map((t) => ML_VOL[t].hist),
+                backgroundColor: "rgba(99,102,241,0.5)",
+                borderRadius: 3,
+              },
+              {
+                label: "GARCH Forecast",
+                data: tickers.map((t) => ML_VOL[t].forecast),
+                backgroundColor: tickers.map((t) =>
+                  ML_VOL[t].trend === "RISING"
+                    ? "rgba(239,68,68,0.7)"
+                    : "rgba(16,185,129,0.7)",
+                ),
+                borderRadius: 3,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { labels: { color: "#94a3b8", font: { size: 11 } } },
+            },
+            scales: {
+              x: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", font: { size: 10 } },
+              },
+              y: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", callback: (v) => v + "%" },
+              },
+            },
+          },
+        });
+
+        document.getElementById("vol-grid").innerHTML = tickers
+          .map((t) => {
+            const v = ML_VOL[t];
+            const sec = TICKERS[t]?.sector;
+            const rising = v.trend === "RISING";
+            return `<div class="vol-card">
+      <div style="display:flex;justify-content:space-between;align-items:top">
+        <div><div class="vol-ticker">${t}</div><div class="vol-sector">${sec}</div></div>
+        <span class="vol-arrow" style="color:${rising ? "var(--red)" : "var(--green)"}">${rising ? "▲" : "▼"} ${Math.abs(v.change)}%</span>
+      </div>
+      <div class="vol-nums">
+        <span class="vol-forecast" style="color:${rising ? "var(--red)" : "var(--green)"}">${v.forecast}%</span>
+        <span class="vol-hist">(hist: ${v.hist}%)</span>
+      </div>
+    </div>`;
+          })
+          .join("");
+      }
+
+      // ── News ──────────────────────────────────────────────────────
+      function renderNews() {
+        document.getElementById("news-feed").innerHTML = NEWS_EVENTS.map(
+          (e) => `
+    <div class="news-item">
+      <div class="news-meta">
+        ${sentimentBadge(e.predicted_sentiment)}
+        ${levelBadge(e.alert_level)}
+        <span class="news-time">${e.date}</span>
+        <span class="news-time" style="text-transform:capitalize">${e.category}</span>
+      </div>
+      <div class="news-headline">${e.headline}</div>
+      <div class="news-summary">${e.summary}</div>
+      <div class="news-sectors">${e.affected_sectors.map((s) => `<span class="sector-chip">${s}</span>`).join("")}</div>
+    </div>
+  `,
+        ).join("");
+
+        const bullCount = NEWS_EVENTS.filter(
+          (e) => e.predicted_sentiment === "BULLISH",
+        ).length;
+        const bearCount = NEWS_EVENTS.filter(
+          (e) => e.predicted_sentiment === "BEARISH",
+        ).length;
+        const mixCount = NEWS_EVENTS.filter(
+          (e) => e.predicted_sentiment === "MIXED/NEUTRAL",
+        ).length;
+
+        destroyChart("news-donut");
+        const ctx = document
+          .getElementById("chart-news-donut")
+          .getContext("2d");
+        charts["news-donut"] = new Chart(ctx, {
+          type: "doughnut",
+          data: {
+            labels: ["Bullish", "Bearish", "Mixed"],
+            datasets: [
+              {
+                data: [bullCount, bearCount, mixCount],
+                backgroundColor: [
+                  "rgba(16,185,129,0.8)",
+                  "rgba(239,68,68,0.8)",
+                  "rgba(245,158,11,0.8)",
+                ],
+                borderWidth: 0,
+                hoverOffset: 4,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "65%",
+            plugins: {
+              legend: { labels: { color: "#94a3b8", font: { size: 11 } } },
+            },
+          },
+        });
+
+        const high = NEWS_EVENTS.filter((e) => e.alert_level === "HIGH").length;
+        const med = NEWS_EVENTS.filter(
+          (e) => e.alert_level === "MEDIUM",
+        ).length;
+        document.getElementById("alert-breakdown").innerHTML = `
+    <div class="stat-row"><span class="stat-key">HIGH alerts</span><span class="stat-val" style="color:var(--red)">${high} events</span></div>
+    <div class="stat-row"><span class="stat-key">MEDIUM alerts</span><span class="stat-val" style="color:var(--amber)">${med} events</span></div>
+    <div class="stat-row"><span class="stat-key">Model</span><span class="stat-val">GradientBoosting</span></div>
+    <div class="stat-row"><span class="stat-key">Training set</span><span class="stat-val">16 events</span></div>
+  `;
+      }
+
+      // ── Stress Tests ──────────────────────────────────────────────
+      let selectedStressClient = "C001";
+
+      function buildClientSelector(containerId, selectedId, onSelect) {
+        document.getElementById(containerId).innerHTML = CLIENTS.map(
+          (c) => `
+    <div class="client-chip ${c.client_id === selectedId ? "active" : ""}" onclick="${onSelect}('${c.client_id}')">${c.name.split(" ")[0]} ${c.name.split(" ").slice(-1)[0]}</div>
+  `,
+        ).join("");
+      }
+
+      function selectStressClient(id) {
+        selectedStressClient = id;
+        buildClientSelector("stress-client-selector", id, "selectStressClient");
+        renderStressCharts();
+      }
+
+      function renderStress() {
+        buildClientSelector(
+          "stress-client-selector",
+          selectedStressClient,
+          "selectStressClient",
+        );
+        renderStressCharts();
+      }
+
+      function renderStressCharts() {
+        const client = CLIENTS.find(
+          (c) => c.client_id === selectedStressClient,
+        );
+        const results = runStress(client);
+
+        destroyChart("stress-bar");
+        const ctx = document
+          .getElementById("chart-stress-bar")
+          .getContext("2d");
+        charts["stress-bar"] = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: results.map((r) => r.scenario),
+            datasets: [
+              {
+                label: "Portfolio Impact (%)",
+                data: results.map((r) => parseFloat(r.impact_pct)),
+                backgroundColor: results.map((r) =>
+                  parseFloat(r.impact_pct) < 0
+                    ? "rgba(239,68,68,0.7)"
+                    : "rgba(16,185,129,0.7)",
+                ),
+                borderRadius: 4,
+              },
+            ],
+          },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", callback: (v) => v + "%" },
+              },
+              y: {
+                grid: { display: false },
+                ticks: { color: "#94a3b8", font: { size: 10 } },
+              },
+            },
+          },
+        });
+
+        document.getElementById("stress-detail").innerHTML = results
+          .map((r) => {
+            const neg = parseFloat(r.impact_pct) < 0;
+            return `<div class="stress-item">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div class="stress-name">${r.scenario}</div>
+          <div class="stress-desc">${r.desc}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="stress-impact" style="color:${neg ? "var(--red)" : "var(--green)"}">${r.impact_pct}%</div>
+          <div style="font-size:11px;color:var(--muted)">${fmt$(r.dollar)}</div>
+        </div>
+      </div>
+    </div>`;
+          })
+          .join("");
+      }
+
+      // ── Monte Carlo ───────────────────────────────────────────────
+      let selectedMCClient = "C001";
+
+      function selectMCClient(id) {
+        selectedMCClient = id;
+        buildClientSelector("mc-client-selector", id, "selectMCClient");
+        renderMCCharts();
+      }
+
+      function renderMC() {
+        buildClientSelector(
+          "mc-client-selector",
+          selectedMCClient,
+          "selectMCClient",
+        );
+        renderMCCharts();
+      }
+
+      function renderMCCharts() {
+        const client = CLIENTS.find((c) => c.client_id === selectedMCClient);
+        const rets = allPortRets[client.client_id];
+        const mc = runMC(
+          rets,
+          client.portfolio_value,
+          client.time_horizon_years,
+        );
+
+        // Histogram
+        destroyChart("mc-hist");
+        const ctx1 = document.getElementById("chart-mc-hist").getContext("2d");
+        charts["mc-hist"] = new Chart(ctx1, {
+          type: "bar",
+          data: {
+            labels: mc.hist.map((b) => fmt$(b.lo)),
+            datasets: [
+              {
+                data: mc.hist.map((b) => b.count),
+                backgroundColor: mc.hist.map((b) =>
+                  b.lo < client.portfolio_value
+                    ? "rgba(239,68,68,0.5)"
+                    : "rgba(16,185,129,0.5)",
+                ),
+                borderRadius: 2,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { display: false },
+              y: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b" },
+              },
+            },
+          },
+        });
+
+        // Stats
+        document.getElementById("mc-stats").innerHTML = `
+    <div class="card-title">Simulation Statistics</div>
+    <div class="stat-row"><span class="stat-key">Starting Value</span><span class="stat-val">${fmt$(mc.starting)}</span></div>
+    <div class="stat-row"><span class="stat-key">Horizon</span><span class="stat-val">${mc.years} years</span></div>
+    <div class="stat-row"><span class="stat-key">Simulations</span><span class="stat-val">1,000 paths</span></div>
+    <div class="stat-row"><span class="stat-key">Ann. Return (hist)</span><span class="stat-val">${mc.annual_ret}%</span></div>
+    <div class="stat-row"><span class="stat-key">Ann. Volatility</span><span class="stat-val">${mc.annual_vol}%</span></div>
+    <div class="stat-row"><span class="stat-key">Prob. Positive</span><span class="stat-val" style="color:var(--green)">${mc.prob_pos}%</span></div>
+    <div class="stat-row"><span class="stat-key">Median Outcome</span><span class="stat-val" style="color:var(--green)">${fmt$(mc.median)}</span></div>
+    <div class="stat-row"><span class="stat-key">P10 (Bear case)</span><span class="stat-val" style="color:var(--red)">${fmt$(mc.p10)}</span></div>
+    <div class="stat-row"><span class="stat-key">P90 (Bull case)</span><span class="stat-val" style="color:var(--green)">${fmt$(mc.p90)}</span></div>
+  `;
+
+        // Percentiles
+        destroyChart("mc-percentiles");
+        const ctx2 = document
+          .getElementById("chart-mc-percentiles")
+          .getContext("2d");
+        charts["mc-percentiles"] = new Chart(ctx2, {
+          type: "bar",
+          data: {
+            labels: ["P10 (Bear)", "P25", "Median", "P75", "P90 (Bull)"],
+            datasets: [
+              {
+                data: [mc.p10, mc.p25, mc.median, mc.p75, mc.p90].map(
+                  (v) => v / 1000,
+                ),
+                backgroundColor: [
+                  "#ef4444",
+                  "#f59e0b",
+                  "#3b82f6",
+                  "#10b981",
+                  "#10b981",
+                ],
+                borderRadius: 5,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { grid: { display: false }, ticks: { color: "#94a3b8" } },
+              y: {
+                grid: { color: "rgba(30,45,69,0.5)" },
+                ticks: { color: "#64748b", callback: (v) => "$" + v + "K" },
+              },
+            },
+          },
+        });
+      }
+
+      // ── Navigation ────────────────────────────────────────────────
+      const viewRenderers = {
+        overview: renderOverview,
+        risk: renderRisk,
+        volatility: renderVolatility,
+        news: renderNews,
+        stress: renderStress,
+        montecarlo: renderMC,
+        models: () => {},
+      };
+
+      function switchView(el) {
+        document
+          .querySelectorAll(".nav-item")
+          .forEach((n) => n.classList.remove("active"));
+        document
+          .querySelectorAll(".view")
+          .forEach((v) => v.classList.remove("active"));
+        el.classList.add("active");
+        const view = el.dataset.view;
+        document.getElementById(`view-${view}`).classList.add("active");
+        viewRenderers[view]?.();
+      }
+
+      function switchToClient(id) {
+        selectedStressClient = id;
+        selectedMCClient = id;
+        const stressNav = document.querySelector('[data-view="stress"]');
+        switchView(stressNav);
+      }
+
+      function init() {
+        renderOverview();
+      }
+      init();
+    </script>
+  </body>
+</html>

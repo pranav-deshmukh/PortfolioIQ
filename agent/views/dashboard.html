@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LPL Agent Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; font-size: 14px; }
+    h1 { font-size: 20px; margin-bottom: 16px; color: #f1f5f9; }
+    h2 { font-size: 16px; margin: 20px 0 10px; color: #94a3b8; border-bottom: 1px solid #1e293b; padding-bottom: 6px; }
+    .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    button { padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #475569; cursor: wait; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; background: #475569; }
+    .btn-sm:hover { background: #64748b; }
+    .status { font-size: 12px; color: #64748b; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+    .tab { padding: 6px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; cursor: pointer; font-size: 12px; color: #94a3b8; }
+    .tab.active { background: #3b82f6; border-color: #3b82f6; color: white; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+    .alert-card { border-left: 4px solid; }
+    .alert-CRITICAL { border-left-color: #ef4444; }
+    .alert-WARNING { border-left-color: #f59e0b; }
+    .alert-MONITOR { border-left-color: #3b82f6; }
+    .alert-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+    .alert-desc { font-size: 12px; color: #94a3b8; line-height: 1.5; }
+    .alert-meta { display: flex; gap: 10px; margin-top: 8px; font-size: 11px; color: #64748b; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+    .badge-critical { background: rgba(239,68,68,0.2); color: #f87171; }
+    .badge-warning { background: rgba(245,158,11,0.2); color: #fbbf24; }
+    .badge-monitor { background: rgba(59,130,246,0.2); color: #60a5fa; }
+    .badge-high { background: rgba(239,68,68,0.2); color: #f87171; }
+    .badge-medium { background: rgba(245,158,11,0.2); color: #fbbf24; }
+    .badge-low { background: rgba(16,185,129,0.2); color: #34d399; }
+    .insight-card { margin-bottom: 12px; }
+    .insight-summary { font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #f1f5f9; }
+    .insight-section { font-size: 12px; color: #94a3b8; line-height: 1.6; margin-bottom: 6px; }
+    .insight-section strong { color: #cbd5e1; }
+    .talking-points { list-style: none; padding: 0; }
+    .talking-points li { padding: 3px 0 3px 14px; font-size: 12px; color: #94a3b8; position: relative; }
+    .talking-points li::before { content: "→"; position: absolute; left: 0; color: #3b82f6; }
+    .pipeline-run { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1e293b; font-size: 12px; }
+    .pipeline-status { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+    .pipeline-completed { background: rgba(16,185,129,0.2); color: #34d399; }
+    .pipeline-failed { background: rgba(239,68,68,0.2); color: #f87171; }
+    .pipeline-running { background: rgba(59,130,246,0.2); color: #60a5fa; }
+    .empty { text-align: center; padding: 40px; color: #475569; }
+    .client-filter { margin-bottom: 12px; display: flex; gap: 4px; flex-wrap: wrap; }
+    .client-chip { padding: 4px 10px; background: #1e293b; border: 1px solid #334155; border-radius: 16px; font-size: 11px; cursor: pointer; color: #94a3b8; }
+    .client-chip.active { background: rgba(59,130,246,0.2); border-color: #3b82f6; color: #60a5fa; }
+    .action-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+    .suggested-action { font-size: 12px; color: #fbbf24; font-style: italic; }
+    .dismiss-btn { font-size: 10px; padding: 2px 8px; background: transparent; border: 1px solid #475569; color: #64748b; border-radius: 4px; cursor: pointer; }
+    .dismiss-btn:hover { border-color: #94a3b8; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1>⚡ LPL Agent Dashboard</h1>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span class="status" id="status">Ready</span>
+      <button onclick="triggerPipeline()" id="run-btn">▶ Run Pipeline Now</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('alerts', this)">🔔 Alerts</div>
+    <div class="tab" onclick="switchTab('insights', this)">📊 Client Insights</div>
+    <div class="tab" onclick="switchTab('runs', this)">⚙ Pipeline Runs</div>
+  </div>
+
+  <!-- ALERTS TAB -->
+  <div id="tab-alerts" class="tab-content">
+    <h2>Active Alerts</h2>
+    <div id="alerts-container"><div class="empty">No alerts yet. Run the pipeline to generate alerts.</div></div>
+  </div>
+
+  <!-- INSIGHTS TAB -->
+  <div id="tab-insights" class="tab-content" style="display:none">
+    <h2>Client Insights</h2>
+    <div class="client-filter" id="client-filter"></div>
+    <div id="insights-container"><div class="empty">No insights yet. Run the pipeline to generate insights.</div></div>
+  </div>
+
+  <!-- PIPELINE RUNS TAB -->
+  <div id="tab-runs" class="tab-content" style="display:none">
+    <h2>Pipeline Run History</h2>
+    <div id="runs-container"><div class="empty">No pipeline runs yet.</div></div>
+  </div>
+
+  <script>
+    let currentTab = 'alerts';
+    let selectedClient = null;
+
+    // ── Tab switching ──────────────────────────────────────────────
+    function switchTab(tab, el) {
+      currentTab = tab;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+      el.classList.add('active');
+      document.getElementById(`tab-${tab}`).style.display = 'block';
+      loadData();
+    }
+
+    // ── Load data ─────────────────────────────────────────────────
+    async function loadData() {
+      if (currentTab === 'alerts') await loadAlerts();
+      if (currentTab === 'insights') await loadInsights();
+      if (currentTab === 'runs') await loadRuns();
+    }
+
+    async function loadAlerts() {
+      try {
+        const res = await fetch('/api/alerts?all=true');
+        const alerts = await res.json();
+        const container = document.getElementById('alerts-container');
+        if (alerts.length === 0) {
+          container.innerHTML = '<div class="empty">No alerts yet. Run the pipeline to generate alerts.</div>';
+          return;
+        }
+        container.innerHTML = alerts.map(a => `
+          <div class="card alert-card alert-${a.severity}">
+            <div style="display:flex;justify-content:space-between;align-items:start">
+              <div>
+                <span class="badge badge-${a.severity.toLowerCase()}">${a.severity}</span>
+                <span style="font-size:11px;color:#64748b;margin-left:8px">${a.client_id}</span>
+              </div>
+              <span style="font-size:10px;color:#475569">${new Date(a.created_at).toLocaleString()}</span>
+            </div>
+            <div class="alert-title" style="margin-top:6px">${a.title}</div>
+            <div class="alert-desc">${a.description}</div>
+            ${a.suggested_action ? `<div class="action-row"><span class="suggested-action">→ ${a.suggested_action}</span></div>` : ''}
+            ${a.related_event ? `<div class="alert-meta"><span>📰 ${a.related_event}</span></div>` : ''}
+            <div class="action-row">
+              <span class="badge badge-${a.status === 'active' ? 'warning' : 'low'}">${a.status}</span>
+              ${a.status === 'active' ? `<button class="dismiss-btn" onclick="dismissAlert('${a._id}')">Dismiss</button>` : ''}
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Error loading alerts:', err);
+      }
+    }
+
+    async function loadInsights() {
+      try {
+        // Load client filter
+        const clientsRes = await fetch('/api/clients');
+        const clients = await clientsRes.json();
+        document.getElementById('client-filter').innerHTML =
+          `<div class="client-chip ${!selectedClient ? 'active' : ''}" onclick="filterClient(null)">All</div>` +
+          clients.map(c => `<div class="client-chip ${selectedClient === c.client_id ? 'active' : ''}" onclick="filterClient('${c.client_id}')">${c.name.split(' ')[0]} ${c.name.split(' ').slice(-1)[0]}</div>`).join('');
+
+        const url = selectedClient ? `/api/insights?client_id=${selectedClient}` : '/api/insights';
+        const res = await fetch(url);
+        const insights = await res.json();
+        const container = document.getElementById('insights-container');
+        if (insights.length === 0) {
+          container.innerHTML = '<div class="empty">No insights yet. Run the pipeline to generate insights.</div>';
+          return;
+        }
+        container.innerHTML = insights.map(ins => `
+          <div class="card insight-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-weight:600;font-size:13px">${ins.client_id}</span>
+              <div>
+                <span class="badge badge-${ins.urgency}">${ins.urgency} urgency</span>
+                <span style="font-size:10px;color:#475569;margin-left:8px">${new Date(ins.created_at).toLocaleString()}</span>
+              </div>
+            </div>
+            <div class="insight-summary">${ins.summary}</div>
+            <div class="insight-section"><strong>Impact:</strong> ${ins.impact_analysis}</div>
+            <div class="insight-section"><strong>Risk:</strong> ${ins.risk_assessment}</div>
+            <div class="insight-section"><strong>Recommendations:</strong> ${ins.recommendations}</div>
+            ${ins.talking_points ? `
+              <div class="insight-section"><strong>Talking Points:</strong></div>
+              <ul class="talking-points">${(Array.isArray(ins.talking_points) ? ins.talking_points : [ins.talking_points]).map(tp => `<li>${tp}</li>`).join('')}</ul>
+            ` : ''}
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Error loading insights:', err);
+      }
+    }
+
+    async function loadRuns() {
+      try {
+        const res = await fetch('/api/pipeline-runs');
+        const runs = await res.json();
+        const container = document.getElementById('runs-container');
+        if (runs.length === 0) {
+          container.innerHTML = '<div class="empty">No pipeline runs yet.</div>';
+          return;
+        }
+        container.innerHTML = runs.map(r => `
+          <div class="card">
+            <div class="pipeline-run">
+              <div>
+                <span class="pipeline-status pipeline-${r.status}">${r.status}</span>
+                <span style="margin-left:8px;color:#94a3b8">${r.news_count || 0} events</span>
+              </div>
+              <div style="color:#64748b;font-size:11px">
+                ${new Date(r.started_at).toLocaleString()}
+                ${r.duration_seconds ? ` · ${r.duration_seconds.toFixed(1)}s` : ''}
+              </div>
+            </div>
+            ${r.agent_summary ? `<div style="font-size:12px;color:#94a3b8;margin-top:8px;line-height:1.5;white-space:pre-wrap">${r.agent_summary.substring(0, 500)}${r.agent_summary.length > 500 ? '...' : ''}</div>` : ''}
+            ${r.error ? `<div style="font-size:12px;color:#f87171;margin-top:8px">${r.error}</div>` : ''}
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Error loading runs:', err);
+      }
+    }
+
+    // ── Actions ───────────────────────────────────────────────────
+    async function triggerPipeline() {
+      const btn = document.getElementById('run-btn');
+      const status = document.getElementById('status');
+      btn.disabled = true;
+      btn.textContent = '⏳ Running...';
+      status.textContent = 'Pipeline running...';
+
+      try {
+        await fetch('/api/pipeline/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ news_count: 3 }) });
+        status.textContent = 'Pipeline started! Waiting for results...';
+        // Poll for completion
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          if (attempts > 60) {
+            clearInterval(poll);
+            status.textContent = 'Pipeline taking long — check console';
+            btn.disabled = false;
+            btn.textContent = '▶ Run Pipeline Now';
+            return;
+          }
+          const runsRes = await fetch('/api/pipeline-runs');
+          const runs = await runsRes.json();
+          if (runs[0] && runs[0].status !== 'running') {
+            clearInterval(poll);
+            status.textContent = `Pipeline ${runs[0].status} (${runs[0].duration_seconds?.toFixed(1) || '?'}s)`;
+            btn.disabled = false;
+            btn.textContent = '▶ Run Pipeline Now';
+            // Reload ALL tabs data
+            loadAlerts();
+            loadInsights();
+            loadRuns();
+          }
+        }, 2000);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        btn.disabled = false;
+        btn.textContent = '▶ Run Pipeline Now';
+      }
+    }
+
+    function filterClient(clientId) {
+      selectedClient = clientId;
+      loadInsights();
+    }
+
+    async function dismissAlert(id) {
+      await fetch(`/api/alerts/${id}/dismiss`, { method: 'POST' });
+      loadAlerts();
+    }
+
+    // ── Init ──────────────────────────────────────────────────────
+    loadAlerts();
+    loadInsights();
+    loadRuns();
+    // Auto refresh every 30s
+    setInterval(() => { loadAlerts(); loadInsights(); loadRuns(); }, 30000);
+  </script>
+</body>
+</html>
