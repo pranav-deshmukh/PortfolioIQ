@@ -6,6 +6,7 @@ import { MarketDataAPIService } from "../services/marketData-api.service";
 import { MarketContextAPIService } from "../services/marketContext-api.service";
 import { MacroAPIService } from "../services/macroData-api.service";
 import { VolatilityAPIService } from "../services/volatility-api.service";
+import { NewsAPIService } from "../services/newsData-api.service";
 
 const router = express.Router();
 
@@ -14,6 +15,7 @@ const marketDataService = new MarketDataAPIService();
 const marketContextService = new MarketContextAPIService();
 const macroService = new MacroAPIService();
 const volatilityService = new VolatilityAPIService();
+const newsService = new NewsAPIService();
 
 router.get("/test-all", async (req: Request, res: Response) => {
   try {
@@ -60,6 +62,68 @@ router.get("/test-all", async (req: Request, res: Response) => {
 
         // Optional
         // vix,
+      },
+    });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+router.get("/test-news", async (req: Request, res: Response) => {
+  try {
+    const symbols = ["AAPL", "MSFT"];
+
+    const from = "2026-03-25";
+    const to = "2026-04-01";
+
+    // ---------- 1. Company News ----------
+    const companyNews = await newsService.getCompanyNews(
+      "AAPL",
+      from,
+      to
+    );
+
+    // ---------- 2. Market News ----------
+    const marketNews = await newsService.getMarketNews();
+
+    // ---------- 3. Portfolio News ----------
+    const portfolioNews = await newsService.getPortfolioNews(
+      symbols,
+      from,
+      to
+    );
+
+    // ---------- 4. Scoring ----------
+    const scoredNews = newsService.scoreNews(
+      portfolioNews,
+      symbols
+    );
+
+    // ---------- 🔥 5. FULL CONTENT ENRICHMENT ----------
+    const enrichedNews = await newsService.enrichNewsWithContent(
+      scoredNews
+    );
+
+    res.json({
+      success: true,
+      data: {
+        companyNewsSample: companyNews.slice(0, 2),
+        marketNewsSample: marketNews.slice(0, 2),
+
+        portfolioNewsSample: portfolioNews.slice(0, 2),
+
+        scoredNewsSample: scoredNews.slice(0, 2),
+
+        // 🔥 NEW (IMPORTANT)
+        enrichedNewsSample: enrichedNews.map((item) => ({
+          headline: item.headline,
+          relevanceScore: item.relevanceScore,
+          contentPreview: item.fullContent?.slice(0, 300), // limit response
+        })),
       },
     });
   } catch (error: any) {
