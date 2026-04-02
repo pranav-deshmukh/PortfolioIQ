@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+/* ── Base styles ─────────────────────────────────────────────────── */
+
+body {
+  @apply bg-slate-50 text-slate-800 antialiased;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ── Pulse animation for status dot ──────────────────────────────── */
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 2s infinite;
+}
+
+/* ── Chat Markdown prose styles ──────────────────────────────────── */
+
+.chat-prose {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #475569; /* slate-600 */
+}
+.chat-prose h1,
+.chat-prose h2,
+.chat-prose h3 {
+  font-weight: 600;
+  color: #1e293b; /* slate-800 */
+  margin-top: 0.75em;
+  margin-bottom: 0.35em;
+  line-height: 1.35;
+}
+.chat-prose h1 { font-size: 15px; }
+.chat-prose h2 { font-size: 13.5px; }
+.chat-prose h3 { font-size: 12.5px; }
+.chat-prose h1:first-child,
+.chat-prose h2:first-child,
+.chat-prose h3:first-child {
+  margin-top: 0;
+}
+.chat-prose p {
+  margin-top: 0.4em;
+  margin-bottom: 0.4em;
+}
+.chat-prose strong {
+  font-weight: 600;
+  color: #334155; /* slate-700 */
+}
+.chat-prose ul,
+.chat-prose ol {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+  padding-left: 1.25em;
+}
+.chat-prose ul { list-style-type: disc; }
+.chat-prose ol { list-style-type: decimal; }
+.chat-prose li {
+  margin-top: 0.15em;
+  margin-bottom: 0.15em;
+}
+.chat-prose li > ul,
+.chat-prose li > ol {
+  margin-top: 0.15em;
+  margin-bottom: 0.15em;
+}
+.chat-prose code {
+  font-size: 11px;
+  background: #e2e8f0; /* slate-200 */
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: ui-monospace, monospace;
+}
+.chat-prose hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 0.6em 0;
+}
+.chat-prose blockquote {
+  border-left: 3px solid #93c5fd; /* blue-300 */
+  padding-left: 0.75em;
+  margin: 0.5em 0;
+  color: #64748b; /* slate-500 */
+}
