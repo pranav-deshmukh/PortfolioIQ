@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import PortfolioModel, { Portfolio } from "../models/portfolio.model";
+import PortfolioModel, { IPortfolio } from "../models/portfolio.model";
 
 let isConnected = false;
 
@@ -22,7 +22,7 @@ export async function connectDB() {
   }
 }
 
-export async function createPortfolio(data: Partial<Portfolio>) {
+export async function createPortfolio(data: Partial<IPortfolio>) {
   try {
     await connectDB();
     const newPortfolio = await PortfolioModel.create(data);
