@@ -1,50 +1,51 @@
-// models/portfolio.model.ts
-
 import mongoose, { Schema, Document } from "mongoose";
 
-// Holding Interface
-export interface Holding {
-  asset_id: string;
-  asset_type: string;
+export interface IHolding {
+  symbol: string;
+  name: string;
   sector: string;
   weight: number;
-  purchase_price: number;
+  current_price: number;
+  quantity: number;
 }
 
-// Portfolio Interface
-export interface Portfolio extends Document {
+export interface IPortfolio extends Document {
   client_id: string;
   portfolio_value: number;
-  risk_profile: string;
+  risk_profile: "low" | "medium" | "high";
   investment_horizon_years: number;
-  holdings: Holding[];
+  holdings: IHolding[];
+  created_at: Date;
 }
 
-// Holding Schema
-const HoldingSchema: Schema = new Schema(
+const HoldingSchema = new Schema<IHolding>(
   {
-    asset_id: { type: String, required: true },
-    asset_type: { type: String, required: true },
+    symbol: { type: String, required: true },
+    name: { type: String, required: true },
     sector: { type: String, required: true },
     weight: { type: Number, required: true },
-    purchase_price: { type: Number, required: true },
+    current_price: { type: Number, required: true },
+    quantity: { type: Number, required: true },
   },
-  { _id: false } // prevents extra _id inside holdings array
+  { _id: false }
 );
 
-// Portfolio Schema
-const PortfolioSchema: Schema = new Schema(
+const PortfolioSchema = new Schema<IPortfolio>(
   {
-    client_id: { type: String, required: true },
+    client_id: { type: String, required: true, unique: true },
     portfolio_value: { type: Number, required: true },
-    risk_profile: { type: String, required: true },
-    investment_horizon_years: { type: Number, required: true },
-    holdings: {
-      type: [HoldingSchema],
+    risk_profile: {
+      type: String,
+      enum: ["low", "medium", "high"],
       required: true,
     },
+    investment_horizon_years: { type: Number, required: true },
+    holdings: { type: [HoldingSchema], required: true },
+    created_at: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );
 
-export default mongoose.model<Portfolio>("Portfolio", PortfolioSchema);
+const Portfolio = mongoose.model<IPortfolio>("Portfolio", PortfolioSchema);
+
+export default Portfolio;
