@@ -2,9 +2,30 @@
 
 export class PortfolioBasicsService {
 
+  // calculate invested cost per asset from purchase price
+  calculateCostBasis(assets: { quantity: number; purchase_price: number }[]): number[] {
+    return assets.map((asset) => asset.quantity * asset.purchase_price);
+  }
+
   // calculate market value per asset
   calculateMarketValue(assets: { quantity: number; price: number }[]): number[] {
     return assets.map(asset => asset.quantity * asset.price);
+  }
+
+  // calculate current market value per holding
+  calculateCurrentMarketValue(
+    assets: { quantity: number; current_price: number }[]
+  ): number[] {
+    return assets.map((asset) => asset.quantity * asset.current_price);
+  }
+
+  // calculate unrealized gain/loss per holding
+  calculateUnrealizedPnL(
+    assets: { quantity: number; purchase_price: number; current_price: number }[]
+  ): number[] {
+    return assets.map(
+      (asset) => asset.quantity * (asset.current_price - asset.purchase_price)
+    );
   }
 
   // calculate total portfolio value

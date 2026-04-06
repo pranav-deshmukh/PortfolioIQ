@@ -5,6 +5,7 @@ export interface IHolding {
   name: string;
   sector: string;
   weight: number;
+  purchase_price: number;
   current_price: number;
   quantity: number;
 }
@@ -24,6 +25,7 @@ const HoldingSchema = new Schema<IHolding>(
     name: { type: String, required: true },
     sector: { type: String, required: true },
     weight: { type: Number, required: true },
+    purchase_price: { type: Number, required: true },
     current_price: { type: Number, required: true },
     quantity: { type: Number, required: true },
   },

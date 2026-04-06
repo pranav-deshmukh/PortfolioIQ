@@ -80,6 +80,20 @@ export function pickRandom<T>(arr: T[], count: number): T[] {
   return shuffled.slice(0, count);
 }
 
+/** Create a plausible purchase price near the current price */
+export function generatePurchasePrice(
+  currentPrice: number,
+  priceRange: [number, number]
+): number {
+  const driftPercent = randomFloat(-0.18, 0.18, 4);
+  const rawPurchasePrice = currentPrice / (1 + driftPercent);
+
+  return randomFloat(
+    Math.max(priceRange[0], rawPurchasePrice * 0.98),
+    Math.min(priceRange[1], rawPurchasePrice * 1.02)
+  );
+}
+
 /**
  * Generate weights that sum to ~1.0
  * Uses Dirichlet-like distribution for realistic allocation spreads
@@ -164,14 +178,16 @@ export function buildHoldings(
 
   return uniqueAssets.map((asset, i) => {
     const current_price = randomFloat(asset.priceRange[0], asset.priceRange[1]);
+    const purchase_price = generatePurchasePrice(current_price, asset.priceRange);
     const allocationValue = portfolioValue * weights[i];
-    const quantity = Math.max(1, Math.round(allocationValue / current_price));
+    const quantity = Math.max(1, Math.round(allocationValue / purchase_price));
 
     return {
       symbol: asset.symbol,
       name: asset.name,
       sector: asset.sector,
       weight: weights[i],
+      purchase_price,
       current_price,
       quantity,
     };
