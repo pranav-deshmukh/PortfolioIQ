@@ -41,6 +41,7 @@ frontend/.env
 # Server
 Server/.env
 Server/src/scripts/newsTest.ts
+Server/tree-structure.py
 
 # -----------------------------
 # TypeScript

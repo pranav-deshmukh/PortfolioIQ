@@ -16,8 +16,6 @@ export interface NewsDataFilters {
   category?: string;
   language?: string;
   domain?: string;
-  from_date?: string;
-  to_date?: string;
   size?: number;
   page?: string;
   prioritydomain?: string;
