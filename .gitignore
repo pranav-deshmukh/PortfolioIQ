@@ -29,6 +29,10 @@ pnpm-debug.log*
 dist/
 build/
 
+# Data
+TrainingData/
+TrainingData.zip
+
 # Next.js
 frontend/.next/
 frontend/out/
@@ -36,6 +40,7 @@ frontend/.env
 
 # Server
 Server/.env
+Server/src/scripts/newsTest.ts
 
 # -----------------------------
 # TypeScript
