@@ -5,6 +5,7 @@ import express from "express";
 
 // Optional: if you have routes
 import testRoutes from "./routes/test.route";
+import newsRoutes from "./routes/news.routes";
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.get("/", (req, res) => {
 
 // Routes
 app.use("/api", testRoutes);
+app.use("/api", newsRoutes);
 
 // Port
 const PORT = process.env.PORT || 3001;
