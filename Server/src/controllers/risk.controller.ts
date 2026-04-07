@@ -22,6 +22,16 @@ export const getRisk = async (req: Request, res: Response) => {
       });
     }
 
+    if ("unavailable" in riskMetrics && riskMetrics.unavailable) {
+      return res.status(503).json({
+        success: false,
+        message:
+          typeof riskMetrics.error === "string"
+            ? riskMetrics.error
+            : "Risk metrics unavailable from market data providers",
+      });
+    }
+
     res.json({
       success: true,
       data: {

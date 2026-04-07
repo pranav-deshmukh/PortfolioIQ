@@ -4,24 +4,11 @@ import { MacroAPIService } from "../services/macroData-api.service";
 export const getMacro = async (req: Request, res: Response) => {
   try {
     const macroService = new MacroAPIService();
-
-    const [interestRates, cpi, gdp, unemployment, yieldCurve] = await Promise.all([
-      macroService.getInterestRates(),
-      macroService.getCPI(),
-      macroService.getGDP(),
-      macroService.getUnemployment(),
-      macroService.getYieldCurve(),
-    ]);
+    const insights = await macroService.getMacroInsights();
 
     res.json({
       success: true,
-      data: {
-        interest_rates: interestRates,
-        cpi,
-        gdp,
-        unemployment,
-        yield_curve: yieldCurve,
-      },
+      data: insights.macro_insights,
     });
   } catch (err) {
     console.error(err);

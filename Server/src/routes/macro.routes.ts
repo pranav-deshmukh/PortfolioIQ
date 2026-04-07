@@ -3,6 +3,6 @@ import { getMacro } from "../controllers/macro.controller";
 
 const router = Router();
 
-router.get("/", getMacro);
+router.get("/macro", getMacro);
 
 export default router;

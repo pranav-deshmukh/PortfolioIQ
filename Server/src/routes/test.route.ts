@@ -6,7 +6,7 @@ import { MarketDataAPIService } from "../services/marketData-api.service";
 import { MarketContextAPIService } from "../services/marketContext-api.service";
 import { MacroAPIService } from "../services/macroData-api.service";
 import { VolatilityAPIService } from "../services/volatility-api.service";
-import { NewsAPIService } from "../services/newsData-api.service";
+// import { NewsAPIService } from "../services/newsData-api.service";
 
 const router = express.Router();
 
@@ -15,7 +15,7 @@ const marketDataService = new MarketDataAPIService();
 const marketContextService = new MarketContextAPIService();
 const macroService = new MacroAPIService();
 const volatilityService = new VolatilityAPIService();
-const newsService = new NewsAPIService();
+// const newsService = new NewsAPIService();
 
 router.get("/test-all", async (req: Request, res: Response) => {
   try {
@@ -32,7 +32,7 @@ router.get("/test-all", async (req: Request, res: Response) => {
     const marketStatus = await marketContextService.getMarketStatus();
 
     // ---------- 4. MACRO ----------
-    const rates = await macroService.getInterestRates();
+    const macroInsights = await macroService.getMacroInsights();
 
     // ---------- 5. VIX (optional safe call) ----------
     let vix: number | null = null;
@@ -58,7 +58,7 @@ router.get("/test-all", async (req: Request, res: Response) => {
         marketStatus,
 
         // Macro
-        ratesSample: rates.slice(0, 3),
+        macroInsights,
 
         // Optional
         // vix,
@@ -73,6 +73,7 @@ router.get("/test-all", async (req: Request, res: Response) => {
   }
 });
 
+/*
 router.get("/test-news", async (req: Request, res: Response) => {
   try {
     const symbols = ["AAPL", "MSFT"];
@@ -134,5 +135,6 @@ router.get("/test-news", async (req: Request, res: Response) => {
     });
   }
 });
+*/
 
 export default router;

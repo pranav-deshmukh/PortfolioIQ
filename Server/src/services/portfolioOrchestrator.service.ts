@@ -71,80 +71,106 @@ export async function getFullPortfolioAnalysis(
     let riskMetrics = null;
 
     if (includeRisk) {
-        const symbols = holdings.map(h => h.symbol);
+        try {
+            const symbols = holdings.map(h => h.symbol);
 
-        // 🔥 fetch price data
-        const priceDataMap = await marketDataService.getMultiplePrices(symbols);
+            // 🔥 fetch price data
+            const priceDataMap = await marketDataService.getMultiplePrices(symbols);
 
-        // 🔥 convert to returns
-        const assetReturns: number[][] = symbols.map(symbol => {
-            const prices = priceDataMap[symbol];
+            const series = symbols
+                .map((symbol, index) => {
+                    const prices = priceDataMap[symbol] ?? [];
 
-            if (!prices || prices.length < 2) return [];
+                    return {
+                        returns: marketDataService.calculateReturns(prices),
+                        weight: weights[index] ?? 0,
+                    };
+                })
+                .filter(item => item.returns.length > 0);
 
-            return marketDataService.calculateReturns(prices);
-        });
+            if (series.length === 0) {
+                throw new Error("No valid historical prices returned for risk calculation");
+            }
 
-        // 🔥 align lengths
-        const minLength = Math.min(...assetReturns.map(r => r.length));
+            const minLength = Math.min(...series.map(item => item.returns.length));
 
-        const alignedReturns = assetReturns.map(r =>
-            r.slice(-minLength)
-        );
+            if (minLength <= 0) {
+                throw new Error("Insufficient historical data for risk calculation");
+            }
 
-        // 🔥 portfolio returns
-        const portfolioReturns = basicsService.calculatePortfolioReturns(
-            alignedReturns,
-            weights
-        );
+            const alignedReturns = series.map(item => item.returns.slice(-minLength));
 
-        // 🔥 market returns
-        const indexData = await marketDataService.getIndexPrices("SPX");
-        const marketReturns = marketDataService.calculateReturns(indexData.values);
+            const alignedWeights = series.map(item => item.weight);
+            const alignedWeightTotal = alignedWeights.reduce((sum, w) => sum + w, 0);
+            const normalizedWeights = alignedWeightTotal > 0
+                ? alignedWeights.map(w => w / alignedWeightTotal)
+                : alignedWeights.map(() => 0);
 
-        const alignedMarketReturns = marketReturns.slice(-portfolioReturns.length);
+            // 🔥 portfolio returns
+            const portfolioReturns = basicsService.calculatePortfolioReturns(
+                alignedReturns,
+                normalizedWeights
+            );
 
-        // =========================
-        // FINAL RISK METRICS
-        // =========================
-        const volatility = riskService.calculateVolatility(portfolioReturns);
+            // 🔥 market returns
+            const indexData = await marketDataService.getIndexPrices("SPX");
+            const marketReturns = marketDataService.calculateReturns(indexData.values);
 
-        const beta = riskService.calculateBeta(
-            portfolioReturns,
-            alignedMarketReturns
-        );
+            const alignedMarketReturns = marketReturns.slice(-portfolioReturns.length);
 
-        const maxDrawdown = riskService.calculateMaxDrawdown(portfolioReturns);
+            // =========================
+            // FINAL RISK METRICS
+            // =========================
+            const volatility = riskService.calculateVolatility(portfolioReturns);
 
-        const var95 = riskService.calculateVaR(portfolioReturns, totalValue);
+            const beta = riskService.calculateBeta(
+                portfolioReturns,
+                alignedMarketReturns
+            );
 
-        const riskLevel = insightsService.calculateRiskLevel(
-            volatility,
-            var95,
-            maxDrawdown
-        );
+            const maxDrawdown = riskService.calculateMaxDrawdown(portfolioReturns);
 
-        const riskScore = insightsService.calculateRiskScore(
-            volatility,
-            var95
-        );
+            const var95 = riskService.calculateVaR(portfolioReturns, totalValue);
 
-        const riskDrivers = insightsService.getRiskDrivers(
-            sectorExposure,
-            volatility,
-            beta,
-            top3
-        );
+            const riskLevel = insightsService.calculateRiskLevel(
+                volatility,
+                var95,
+                maxDrawdown
+            );
 
-        riskMetrics = {
-            volatility,
-            beta,
-            maxDrawdown,
-            var95,
-            riskLevel,
-            riskScore,
-            riskDrivers
-        };
+            const riskScore = insightsService.calculateRiskScore(
+                volatility,
+                var95
+            );
+
+            const riskDrivers = insightsService.getRiskDrivers(
+                sectorExposure,
+                volatility,
+                beta,
+                top3
+            );
+
+            riskMetrics = {
+                volatility,
+                beta,
+                maxDrawdown,
+                var95,
+                riskLevel,
+                riskScore,
+                riskDrivers
+            };
+        } catch (riskError) {
+            const riskMessage = riskError instanceof Error
+                ? riskError.message
+                : "Unknown risk metrics error";
+
+            console.error(`Risk metrics unavailable for client ${clientId}:`, riskError);
+
+            riskMetrics = {
+                unavailable: true,
+                error: riskMessage,
+            };
+        }
     }
 
     // =========================

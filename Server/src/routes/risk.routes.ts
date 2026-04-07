@@ -3,6 +3,6 @@ import { getRisk } from "../controllers/risk.controller";
 
 const router = Router();
 
-router.get("/:clientId", getRisk);
+router.get("/risk/:clientId", getRisk);
 
 export default router;

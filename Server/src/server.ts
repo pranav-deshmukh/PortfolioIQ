@@ -7,6 +7,9 @@ import express from "express";
 import testRoutes from "./routes/test.route";
 import portfolioRoutes from "./routes/portfolio.routes";
 import newsRoutes from "./routes/news.routes";
+import riskRoutes from "./routes/risk.routes";
+import macroRoutes from "./routes/macro.routes";
+import performanceRoutes from "./routes/performance.routes";
 
 const app = express();
 
@@ -20,8 +23,11 @@ app.get("/", (req, res) => {
 
 // Routes
 app.use("/api", testRoutes);
-app.use("/", portfolioRoutes);
+app.use("/api", portfolioRoutes);
 app.use("/api", newsRoutes);
+app.use("/api", riskRoutes);
+app.use("/api", macroRoutes);
+app.use("/api", performanceRoutes);
 
 // Port
 const PORT = process.env.PORT || 3001;

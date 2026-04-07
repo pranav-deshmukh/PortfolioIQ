@@ -3,7 +3,7 @@ import { getPortfolioByClientId } from "../services/portfolioDb.service";
 import { PortfolioBasicsService } from "../services/portfolioBasics.service";
 import { portfolioInsightsService } from "../services/portfolioInsights.service";
 import { RiskMetricsService } from "../services/riskMetrics.service";
-import { MarketDataAPIService } from "../services/marketData-api.service";
+import { MarketDataAPIService, MarketDataAPIError } from "../services/marketData-api.service";
 
 const portfolioBasicsService = new PortfolioBasicsService();
 const riskMetricsService = new RiskMetricsService();
@@ -29,9 +29,18 @@ function toPlainPortfolio<T>(portfolio: T): T {
   return portfolio;
 }
 
+function isCiscoBlocked(error: unknown): boolean {
+  if (!(error instanceof MarketDataAPIError)) {
+    return false;
+  }
+
+  const body = error.responseBody ?? "";
+  return body.includes("block.sse.cisco.com");
+}
+
 export async function getPortfolioController(req: Request, res: Response) {
   try {
-    const { clientId } = req.params;
+    let { clientId } = req.params;
     const includeRisk = parseIncludeRisk(req.query.includeRisk);
 
     if (!clientId) {
@@ -39,6 +48,10 @@ export async function getPortfolioController(req: Request, res: Response) {
         success: false,
         error: "clientId is required",
       });
+    }
+
+    if (Array.isArray(clientId)) {
+      clientId = clientId[0];
     }
 
     const portfolioDocument = await getPortfolioByClientId(clientId);
@@ -71,80 +84,116 @@ export async function getPortfolioController(req: Request, res: Response) {
     };
 
     let riskMetrics: Record<string, unknown> = {};
+    let warnings: string[] = [];
 
     if (includeRisk) {
-      const marketDataService = new MarketDataAPIService();
-      const symbols = holdings.map((holding) => holding.asset_id);
-      const priceMap = await marketDataService.getMultiplePrices(symbols);
-      const historicalReturns = symbols.map((symbol) =>
-        marketDataService.calculateReturns(priceMap[symbol] ?? [])
-      );
-      const alignedLength = historicalReturns.reduce((minLength, returns) => {
-        if (returns.length === 0) {
-          return minLength;
+      try {
+        const marketDataService = new MarketDataAPIService();
+        const symbols = holdings.map((holding) => holding.symbol);
+        const priceMap = await marketDataService.getMultiplePrices(symbols);
+        const series = symbols
+          .map((symbol, index) => {
+            const returns = marketDataService.calculateReturns(priceMap[symbol] ?? []);
+            return {
+              returns,
+              weight: weights[index] ?? 0,
+            };
+          })
+          .filter((item) => item.returns.length > 0);
+
+        if (series.length === 0) {
+          throw new Error("No valid historical prices returned for risk calculation");
         }
 
-        return Math.min(minLength, returns.length);
-      }, Number.POSITIVE_INFINITY);
+        const alignedLength = Math.min(...series.map((item) => item.returns.length));
 
-      const normalizedReturns =
-        alignedLength === Number.POSITIVE_INFINITY
-          ? []
-          : historicalReturns.map((returns) => returns.slice(-alignedLength));
+        if (alignedLength <= 0) {
+          throw new Error("Insufficient historical data for risk calculation");
+        }
 
-      const portfolioReturns =
-        normalizedReturns.length > 0 && alignedLength > 0
-          ? portfolioBasicsService.calculatePortfolioReturns(
-              normalizedReturns,
-              weights
-            )
-          : [];
+        const normalizedReturns = series.map((item) => item.returns.slice(-alignedLength));
 
-      const indexPrices = await marketDataService.getIndexPrices("SPY");
-      const indexReturns = marketDataService
-        .calculateReturns(indexPrices.values)
-        .slice(-portfolioReturns.length);
+        const alignedWeights = series.map((item) => item.weight);
+        const alignedWeightTotal = alignedWeights.reduce((sum, w) => sum + w, 0);
+        const normalizedWeights =
+          alignedWeightTotal > 0
+            ? alignedWeights.map((w) => w / alignedWeightTotal)
+            : alignedWeights.map(() => 0);
 
-      const volatility = riskMetricsService.calculateVolatility(
-        portfolioReturns
-      );
-      const beta = riskMetricsService.calculateBeta(
-        portfolioReturns,
-        indexReturns
-      );
-      const maxDrawdown = riskMetricsService.calculateMaxDrawdown(
-        portfolioReturns
-      );
-      const varAmount = riskMetricsService.calculateVaR(
-        portfolioReturns,
-        portfolio.portfolio_value
-      );
-      const var95 =
-        portfolio.portfolio_value === 0
-          ? 0
-          : varAmount / portfolio.portfolio_value;
+        const portfolioReturns =
+          normalizedReturns.length > 0 && alignedLength > 0
+            ? portfolioBasicsService.calculatePortfolioReturns(
+                normalizedReturns,
+                normalizedWeights
+              )
+            : [];
 
-      riskMetrics = {
-        volatility,
-        beta,
-        max_drawdown: maxDrawdown,
-        var_95: varAmount,
-        risk_level: portfolioInsightsService.calculateRiskLevel(
-          volatility,
-          var95,
-          maxDrawdown
-        ),
-        risk_score: portfolioInsightsService.calculateRiskScore(
-          volatility,
-          var95
-        ),
-        key_risk_drivers: portfolioInsightsService.getRiskDrivers(
-          derivedMetrics.sector_exposure,
+        const indexPrices = await marketDataService.getIndexPrices("SPY");
+        const indexReturns = marketDataService
+          .calculateReturns(indexPrices.values)
+          .slice(-portfolioReturns.length);
+
+        const volatility = riskMetricsService.calculateVolatility(
+          portfolioReturns
+        );
+        const beta = riskMetricsService.calculateBeta(
+          portfolioReturns,
+          indexReturns
+        );
+        const maxDrawdown = riskMetricsService.calculateMaxDrawdown(
+          portfolioReturns
+        );
+        const varAmount = riskMetricsService.calculateVaR(
+          portfolioReturns,
+          portfolio.portfolio_value
+        );
+        const var95 =
+          portfolio.portfolio_value === 0
+            ? 0
+            : varAmount / portfolio.portfolio_value;
+
+        riskMetrics = {
           volatility,
           beta,
-          derivedMetrics.top_3_concentration
-        ),
-      };
+          max_drawdown: maxDrawdown,
+          var_95: varAmount,
+          risk_level: portfolioInsightsService.calculateRiskLevel(
+            volatility,
+            var95,
+            maxDrawdown
+          ),
+          risk_score: portfolioInsightsService.calculateRiskScore(
+            volatility,
+            var95
+          ),
+          key_risk_drivers: portfolioInsightsService.getRiskDrivers(
+            derivedMetrics.sector_exposure,
+            volatility,
+            beta,
+            derivedMetrics.top_3_concentration
+          ),
+        };
+      } catch (riskError) {
+        const defaultRiskMessage =
+          riskError instanceof Error
+            ? riskError.message
+            : "Unknown risk metrics error";
+
+        const riskMessage = isCiscoBlocked(riskError)
+          ? "Market-data provider is blocked by network security (Cisco SSE). Risk metrics are temporarily unavailable."
+          : defaultRiskMessage;
+
+        console.error(
+          `Risk metrics unavailable for client ${clientId}:`,
+          riskError
+        );
+
+        warnings.push(`Risk metrics unavailable: ${riskMessage}`);
+        riskMetrics = {
+          unavailable: true,
+          error: riskMessage,
+        };
+      }
     }
 
     return res.json({
@@ -153,6 +202,7 @@ export async function getPortfolioController(req: Request, res: Response) {
         portfolio,
         derived_metrics: derivedMetrics,
         risk_metrics: riskMetrics,
+        warnings,
       },
     });
   } catch (error) {
