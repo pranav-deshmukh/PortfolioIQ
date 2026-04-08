@@ -11,7 +11,7 @@ export async function connectDB() {
 
   try {
     await mongoose.connect(
-      "mongodb+srv://vns444555_db_user:gw3cpBkxCvqHOgqk@cluster-main.imjr9lg.mongodb.net/portfolio-db"
+      process.env.MONGO_URI || "",
     );
 
     isConnected = true;

@@ -2,8 +2,7 @@ import mongoose from "mongoose";
 import Portfolio, { IHolding } from "../models/portfolio.model";
 
 // ─── MongoDB Connection ──────────────────────────────────────────────
-const MONGO_URI =
-  "mongodb+srv://vns444555_db_user:gw3cpBkxCvqHOgqk@cluster-ain.imjr9lg.mongodb.net/portfolio-db?appName=Cluster-main";
+const MONGO_URI = process.env.MONGO_URI || "";
 
 // ─── Asset Pool (realistic tickers across sectors) ───────────────────
 export const ASSETS: { symbol: string; name: string; sector: string; priceRange: [number, number] }[] = [
