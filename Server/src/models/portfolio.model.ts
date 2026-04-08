@@ -34,7 +34,7 @@ const HoldingSchema = new Schema<IHolding>(
 
 const PortfolioSchema = new Schema<IPortfolio>(
   {
-    client_id: { type: String, required: true, unique: true },
+    client_id: { type: String, required: true }, // ❌ removed unique
     portfolio_value: { type: Number, required: true },
     risk_profile: {
       type: String,

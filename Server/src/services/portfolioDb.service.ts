@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import PortfolioModel, { IPortfolio } from "../models/portfolio.model";
 
 let isConnected = false;
+const TARGET_DB = process.env.MONGO_DB_NAME || "portfolio-db";
 
 export async function connectDB() {
   if (isConnected) {
@@ -10,12 +11,14 @@ export async function connectDB() {
   }
 
   try {
-    await mongoose.connect(
-      process.env.MONGO_URI || "",
-    );
+    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_ACCESS_URI || "";
+
+    await mongoose.connect(mongoUri, {
+      dbName: TARGET_DB,
+    });
 
     isConnected = true;
-    console.log("✅ MongoDB Connected (Atlas)");
+    console.log(`✅ MongoDB Connected (${mongoose.connection.db?.databaseName ?? TARGET_DB})`);
   } catch (err) {
     console.error("❌ MongoDB Connection Error:", err);
     throw new Error("Failed to connect to MongoDB");

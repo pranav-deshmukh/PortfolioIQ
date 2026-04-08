@@ -4,6 +4,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "seed": "tsx src/scripts/portfolioSeeder.ts",
+    "seed:sync": "tsx src/scripts/dataSyncSeeder.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
