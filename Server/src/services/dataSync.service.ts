@@ -16,6 +16,10 @@ interface SyncSummary {
   timestamp: string;
 }
 
+const MIN_UNIQUE_NEWS_ARTICLES = 10;
+const NEWS_FETCH_SIZE_PER_TOPIC = 5;
+const MAX_NEWS_FETCH_ROUNDS = 8;
+
 function asStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter((item): item is string => typeof item === "string");
@@ -26,6 +30,47 @@ function asStringArray(value: unknown): string[] {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function getArticleUniqKey(article: Record<string, unknown>): string | undefined {
+  const articleId = asOptionalString(article.article_id);
+  const sourceId = asOptionalString(article.source_id);
+  const link = asOptionalString(article.link);
+  const title = asOptionalString(article.title);
+  const pubDate = asOptionalString(article.pubDate);
+
+  if (articleId && sourceId) {
+    return `id:${articleId}|src:${sourceId}`;
+  }
+
+  if (link) {
+    return `link:${link}`;
+  }
+
+  if (title && pubDate) {
+    return `title:${title}|date:${pubDate}`;
+  }
+
+  return undefined;
+}
+
+function getArticleMongoFilter(article: Record<string, unknown>) {
+  const articleId = asOptionalString(article.article_id);
+  const sourceId = asOptionalString(article.source_id);
+  const link = asOptionalString(article.link);
+  const title = asOptionalString(article.title);
+  const pubDate = asOptionalString(article.pubDate);
+  const sourceName = asOptionalString(article.source_name);
+
+  if (articleId && sourceId) {
+    return { article_id: articleId, source_id: sourceId };
+  }
+
+  if (link) {
+    return { link };
+  }
+
+  return { title, pubDate, source_name: sourceName };
 }
 
 export async function runFullDataSync(): Promise<SyncSummary> {
@@ -44,74 +89,143 @@ export async function runFullDataSync(): Promise<SyncSummary> {
   // 2) Fetch + store news in `news_events`
   const newsTopics = ["tech", "energy", "commodities", "market", "ai"] as const;
 
-  const topicPayloads = await Promise.all(
-    newsTopics.map((topic) =>
-      fetchNewsData({
-        q: topic,
-        language: "en",
-        country: "us",
-        size: 2,
-      })
-    )
+  const topicState = new Map<string, { page?: string; exhausted: boolean }>(
+    newsTopics.map((topic) => [topic, { exhausted: false }])
   );
 
-  const mergedArticles = topicPayloads.flatMap((payload) =>
-    Array.isArray(payload?.results)
-      ? (payload.results as Record<string, unknown>[])
-      : []
-  );
+  const selectedUniqueNewArticles = new Map<string, Record<string, unknown>>();
+  const seenFetchedKeys = new Set<string>();
+  const knownExistingKeys = new Set<string>();
 
-  const deduped = new Map<string, Record<string, unknown>>();
-  for (const article of mergedArticles) {
-    const articleId = asOptionalString(article.article_id);
-    const link = asOptionalString(article.link);
-    const key = articleId || link;
-
-    if (!key) {
-      continue;
+  for (let round = 0; round < MAX_NEWS_FETCH_ROUNDS; round += 1) {
+    if (selectedUniqueNewArticles.size >= MIN_UNIQUE_NEWS_ARTICLES) {
+      break;
     }
 
-    deduped.set(key, article);
+    const activeTopics = newsTopics.filter((topic) => !topicState.get(topic)?.exhausted);
+    if (activeTopics.length === 0) {
+      break;
+    }
+
+    const topicPayloads = await Promise.all(
+      activeTopics.map(async (topic) => {
+        const state = topicState.get(topic);
+
+        const payload = await fetchNewsData({
+          q: topic,
+          language: "en",
+          country: "us",
+          size: NEWS_FETCH_SIZE_PER_TOPIC,
+          page: state?.page,
+        });
+
+        return { topic, payload };
+      })
+    );
+
+    for (const { topic, payload } of topicPayloads) {
+      const results = Array.isArray(payload?.results)
+        ? (payload.results as Record<string, unknown>[])
+        : [];
+
+      const pendingCandidates = new Map<string, Record<string, unknown>>();
+
+      for (const article of results) {
+        const uniqKey = getArticleUniqKey(article);
+
+        if (!uniqKey) {
+          continue;
+        }
+
+        if (
+          seenFetchedKeys.has(uniqKey)
+          || knownExistingKeys.has(uniqKey)
+          || selectedUniqueNewArticles.has(uniqKey)
+          || pendingCandidates.has(uniqKey)
+        ) {
+          continue;
+        }
+
+        seenFetchedKeys.add(uniqKey);
+        pendingCandidates.set(uniqKey, article);
+      }
+
+      if (pendingCandidates.size > 0) {
+        const checks = [...pendingCandidates.values()];
+        const existingDocs = await NewsEventModel.find(
+          {
+            $or: checks.map((candidate) => getArticleMongoFilter(candidate)),
+          },
+          {
+            article_id: 1,
+            source_id: 1,
+            link: 1,
+            title: 1,
+            pubDate: 1,
+          }
+        ).lean();
+
+        for (const doc of existingDocs) {
+          const existingKey = getArticleUniqKey(doc as unknown as Record<string, unknown>);
+          if (existingKey) {
+            knownExistingKeys.add(existingKey);
+          }
+        }
+
+        for (const [uniqKey, article] of pendingCandidates) {
+          if (knownExistingKeys.has(uniqKey)) {
+            continue;
+          }
+
+          if (selectedUniqueNewArticles.size >= MIN_UNIQUE_NEWS_ARTICLES) {
+            break;
+          }
+
+          selectedUniqueNewArticles.set(uniqKey, article);
+        }
+      }
+
+      const nextPage = asOptionalString(payload?.nextPage);
+      const state = topicState.get(topic);
+
+      if (state) {
+        state.page = nextPage;
+        state.exhausted = !nextPage || results.length === 0;
+      }
+
+      if (selectedUniqueNewArticles.size >= MIN_UNIQUE_NEWS_ARTICLES) {
+        break;
+      }
+    }
   }
 
-  const articles = [...deduped.values()];
+  const articles = [...selectedUniqueNewArticles.values()];
 
-  const newsBulkOps = articles.map((article) => {
-    const articleId = asOptionalString(article.article_id);
-    const sourceId = asOptionalString(article.source_id);
+  if (articles.length < MIN_UNIQUE_NEWS_ARTICLES) {
+    throw new Error(
+      `Data sync requires ${MIN_UNIQUE_NEWS_ARTICLES} unique new news articles, but only ${articles.length} were available.`
+    );
+  }
 
-    const filter = articleId && sourceId
-      ? { article_id: articleId, source_id: sourceId }
-      : { link: asOptionalString(article.link), pubDate: asOptionalString(article.pubDate) };
+  const newsDocs = articles.map((article) => ({
+    article_id: asOptionalString(article.article_id),
+    title: asOptionalString(article.title),
+    description: asOptionalString(article.description),
+    link: asOptionalString(article.link),
+    pubDate: asOptionalString(article.pubDate),
+    source_id: asOptionalString(article.source_id),
+    source_name: asOptionalString(article.source_name),
+    language: asOptionalString(article.language),
+    country: asStringArray(article.country),
+    category: asStringArray(article.category),
+    keywords: asStringArray(article.keywords),
+    ai_tag: asOptionalString(article.ai_tag),
+    raw: article,
+    fetched_at: new Date(),
+  }));
 
-    return {
-      updateOne: {
-        filter,
-        update: {
-          $set: {
-            article_id: articleId,
-            title: asOptionalString(article.title),
-            description: asOptionalString(article.description),
-            link: asOptionalString(article.link),
-            pubDate: asOptionalString(article.pubDate),
-            source_id: sourceId,
-            source_name: asOptionalString(article.source_name),
-            language: asOptionalString(article.language),
-            country: asStringArray(article.country),
-            category: asStringArray(article.category),
-            keywords: asStringArray(article.keywords),
-            ai_tag: asOptionalString(article.ai_tag),
-            raw: article,
-            fetched_at: new Date(),
-          },
-        },
-        upsert: true,
-      },
-    };
-  });
-
-  if (newsBulkOps.length > 0) {
-    await NewsEventModel.bulkWrite(newsBulkOps, { ordered: false });
+  if (newsDocs.length > 0) {
+    await NewsEventModel.insertMany(newsDocs, { ordered: false });
   }
 
   // 3) Update all portfolio holdings with latest market prices and backfill purchase prices
@@ -210,7 +324,7 @@ export async function runFullDataSync(): Promise<SyncSummary> {
     holdingsUpdated,
     purchasePriceBackfilled,
     latestPricesFetched: Object.keys(latestPriceMap).length,
-    newsEventsStored: articles.length,
+    newsEventsStored: newsDocs.length,
     macroSaved: true,
     timestamp: new Date().toISOString(),
   };
