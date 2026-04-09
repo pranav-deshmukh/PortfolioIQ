@@ -1,7 +1,7 @@
 // ── Pipeline Runner ───────────────────────────────────────────────────
 // Orchestrates: News Ingestion → Analytics → AI Agent
 
-import { fetchNewsBatch } from "./news_ingestion.js";
+import { fetchNewsBatch, fetchNews } from "./news_ingestion.js";
 import { runAnalytics } from "./analytics_engine.js";
 import { runAgent } from "./agent.js";
 import { saveNewsEvents, savePipelineRun, saveAnalyticsSnapshots } from "./db.js";
@@ -27,9 +27,9 @@ export async function runPipeline(newsCount = 3) {
   };
 
   try {
-    // Step 1: Fetch news
+    // Step 1: Fetch news (live from Server API or sample data, controlled by USE_LIVE_NEWS env)
     console.log(`\n[Pipeline] Step 1: Fetching news (${newsCount} events)...`);
-    const news = fetchNewsBatch(newsCount);
+    const news = await fetchNews(newsCount);
     result.news_count = news.length;
     console.log(`[Pipeline] Got ${news.length} events:`);
     news.forEach(n => console.log(`  → ${n.headline}`));

@@ -1,8 +1,127 @@
 // ── News Ingestion Module ─────────────────────────────────────────────
-// Simulates a batch of news arriving every pipeline run.
-// In production, this would pull from a real news API (Bloomberg, Reuters, etc.)
+// Two modes controlled by USE_LIVE_NEWS env variable:
+//   OFF (default) → uses static NEWS_POOL sample data
+//   ON            → fetches real news from the Server API (localhost:3002)
 
 import { v4Ish } from "./utils.js";
+
+// ── Live News Fetch (Server API) ──────────────────────────────────────
+
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:3002";
+
+/**
+ * Infer a category from the article's category array and keywords.
+ * Maps the Server schema categories to agent categories
+ * (earnings, macro, geopolitical, policy, sector).
+ */
+function inferCategory(article) {
+  const cats = (article.category || []).map(c => c.toLowerCase());
+  const kws  = (article.keywords || []).map(k => k.toLowerCase());
+  const title = (article.title || "").toLowerCase();
+  const all  = [...cats, ...kws, title].join(" ");
+
+  if (/earnings|revenue|profit|quarterly|eps|13f|institutional/i.test(all)) return "earnings";
+  if (/fed|gdp|inflation|cpi|rate|treasury|macro|economic/i.test(all))       return "macro";
+  if (/war|sanction|tariff|geopolit|invasion|military|nato/i.test(all))      return "geopolitical";
+  if (/regulation|policy|ban|law|legislation|government|bill/i.test(all))    return "policy";
+  return "sector"; // generic fallback
+}
+
+/**
+ * Infer a rough sentiment hint from headline & description keywords.
+ * Returns "bearish", "bullish", or "neutral".
+ */
+function inferSentiment(article) {
+  const text = `${article.title || ""} ${article.description || ""}`.toLowerCase();
+  const bearishWords = ["crash","fall","drop","decline","loss","miss","slash","cut","warn","plunge","tumble","fear","risk","downturn","recession","layoff","bankrupt"];
+  const bullishWords = ["surge","rally","gain","jump","beat","soar","boost","record","breakthrough","upgrade","bull","growth","profit","optimistic","rise"];
+
+  let score = 0;
+  bearishWords.forEach(w => { if (text.includes(w)) score--; });
+  bullishWords.forEach(w => { if (text.includes(w)) score++; });
+
+  if (score <= -1) return "bearish";
+  if (score >=  1) return "bullish";
+  return "neutral";
+}
+
+/**
+ * Infer regions from the article's country array.
+ */
+function inferRegions(article) {
+  const countries = (article.country || []).map(c => c.toLowerCase());
+  const regions = [];
+  if (countries.some(c => c.includes("united states")))        regions.push("us");
+  if (countries.some(c => c.includes("china")))                 regions.push("china", "asia");
+  if (countries.some(c => c.includes("india")))                 regions.push("india", "asia");
+  if (countries.some(c => c.includes("japan") || c.includes("korea") || c.includes("taiwan"))) regions.push("asia");
+  if (countries.some(c => c.includes("germany") || c.includes("france") || c.includes("united kingdom"))) regions.push("europe");
+  if (countries.some(c => c.includes("saudi") || c.includes("iran") || c.includes("iraq")))   regions.push("middle_east");
+  if (countries.some(c => c.includes("russia")))                regions.push("russia");
+  if (regions.length === 0) regions.push("global");
+  return [...new Set(regions)];
+}
+
+/**
+ * Convert a Server API article to the agent's news event format.
+ */
+function mapArticleToAgentEvent(article, batchId, index) {
+  return {
+    event_id:           `${batchId}_${index}`,
+    batch_id:           batchId,
+    timestamp:          article.pubDate || new Date().toISOString(),
+    headline:           article.title || "Untitled",
+    body:               article.description || "",
+    category:           inferCategory(article),
+    source:             article.source_name || article.source_id || "Unknown",
+    raw_sentiment_hint: inferSentiment(article),
+    regions:            inferRegions(article),
+    keywords:           article.keywords || [],
+    // Metadata from the live article (kept for traceability)
+    _live:              true,
+    _article_id:        article.article_id,
+    _link:              article.link,
+    _source_url:        article.source_url,
+  };
+}
+
+/**
+ * Fetch `count` real news articles from the Server API and map them
+ * to the agent's expected news event format.
+ * Falls back to sample data if the Server is unreachable.
+ */
+export async function fetchLiveNewsBatch(count = 3) {
+  const batchId = `live_${Date.now()}`;
+  const url = `${SERVER_BASE_URL}/api/news?q=stock+market&language=en&size=${count}`;
+
+  console.log(`[News] Fetching ${count} live articles from Server → ${url}`);
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+
+    if (!res.ok) {
+      throw new Error(`Server responded ${res.status}: ${await res.text()}`);
+    }
+
+    const json = await res.json();
+    const articles = json?.data?.articles ?? [];
+
+    if (articles.length === 0) {
+      console.warn("[News] Server returned 0 articles — falling back to sample data");
+      return fetchNewsBatch(count);
+    }
+
+    const events = articles.slice(0, count).map((a, i) => mapArticleToAgentEvent(a, batchId, i));
+    console.log(`[News] ✅ Got ${events.length} live events:`);
+    events.forEach(e => console.log(`  → ${e.headline.substring(0, 80)}`));
+    return events;
+
+  } catch (err) {
+    console.error(`[News] ❌ Live fetch failed: ${err.message}`);
+    console.warn("[News] Falling back to sample data...");
+    return fetchNewsBatch(count);
+  }
+}
 
 // Preset news pools — the pipeline picks a random subset each run
 const NEWS_POOL = [
@@ -151,3 +270,25 @@ export function fetchSpecificEvents(keywords) {
 }
 
 export { NEWS_POOL };
+
+/**
+ * Check if live news mode is enabled.
+ * Reads USE_LIVE_NEWS from environment — "ON" means live, anything else means sample.
+ */
+export function isLiveNewsEnabled() {
+  return (process.env.USE_LIVE_NEWS || "").toUpperCase() === "ON";
+}
+
+/**
+ * Smart fetch — reads the USE_LIVE_NEWS env variable and picks the right source.
+ * ON  → fetchLiveNewsBatch (Server API)
+ * OFF → fetchNewsBatch     (sample data)
+ */
+export async function fetchNews(count = 3) {
+  if (isLiveNewsEnabled()) {
+    console.log("[News] 🔴 LIVE mode enabled (USE_LIVE_NEWS=ON) — fetching from Server API");
+    return fetchLiveNewsBatch(count);
+  }
+  console.log("[News] 🟡 SAMPLE mode (USE_LIVE_NEWS=OFF) — using static news pool");
+  return fetchNewsBatch(count);
+}
