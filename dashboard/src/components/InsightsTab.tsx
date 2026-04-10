@@ -4,6 +4,7 @@ import { ArrowRight, TrendingDown, ShieldAlert, Lightbulb, MessageCircle, User, 
 import type { Insight, Client } from "@/types";
 import EmptyState from "./EmptyState";
 import ChatPanel from "./ChatPanel";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 /* ── Urgency config ──────────────────────────────────────────────── */
 
@@ -67,10 +68,11 @@ export default function InsightsTab({
         })}
       </div>
 
-      {/* ── 65 / 35 Split ────────────────────────────────────────── */}
-      <div className="flex gap-5" style={{ height: "calc(100vh - 200px)" }}>
-        {/* Left: Insights (65%) */}
-        <div className="w-[65%] overflow-y-auto pr-2">
+      {/* ── Resizable 65 / 35 Split ─────────────────────────────── */}
+      <PanelGroup direction="horizontal" style={{ height: "calc(100vh - 200px)" }}>
+        {/* Left: Insights */}
+        <Panel defaultSize={65} minSize={30}>
+          <div className="h-full overflow-y-auto pr-2">
           {insights.length === 0 ? (
             <EmptyState message="No insights yet. Run the pipeline to generate insights." />
           ) : (
@@ -198,13 +200,21 @@ export default function InsightsTab({
               })}
             </div>
           )}
-        </div>
+          </div>
+        </Panel>
 
-        {/* Right: AI Chat (35%) */}
-        <div className="w-[35%]">
-          <ChatPanel clientId={selectedClient} clientLabel={clientLabel} />
-        </div>
-      </div>
+        {/* Drag handle */}
+        <PanelResizeHandle className="group mx-1 flex w-2 items-center justify-center">
+          <div className="h-8 w-1 rounded-full bg-slate-200 transition-colors group-hover:bg-blue-400 group-active:bg-blue-500" />
+        </PanelResizeHandle>
+
+        {/* Right: AI Chat */}
+        <Panel defaultSize={35} minSize={25}>
+          <div className="h-full">
+            <ChatPanel clientId={selectedClient} clientLabel={clientLabel} />
+          </div>
+        </Panel>
+      </PanelGroup>
     </>
   );
 }

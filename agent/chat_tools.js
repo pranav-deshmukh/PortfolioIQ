@@ -4,7 +4,14 @@
 
 import { getLatestInsights, getActiveAlerts, getDB } from "./db.js";
 import { CLIENTS, TICKERS, RISK_THRESHOLDS } from "./data/sample_data.js";
-import { computeVaR } from "./analytics_engine.js";
+import {
+  computeVaR,
+  runStressTest,
+  runStressTestSuite,
+  runMonteCarloSimulation,
+  comparePortfolioChange,
+  generateAllocationRecommendation
+} from "./analytics_engine.js";
 
 
 // ══════════════════════════════════════════════════════════════════════
@@ -99,6 +106,62 @@ export const CHAT_TOOL_DEFINITIONS = [
         required: ["client_id", "scenario"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_monte_carlo_simulation",
+      description: "Run a Monte Carlo simulation on a client's current portfolio. Use when the advisor asks about future outcomes, upside/downside ranges, probability of gain, or projected portfolio value.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_id: { type: "string", description: "Client ID to simulate" },
+          years: { type: "number", description: "Projection horizon in years (default 3)" },
+          paths: { type: "number", description: "Number of Monte Carlo paths (default 1000)" }
+        },
+        required: ["client_id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "compare_portfolio_change",
+      description: "Compare a client's current portfolio against a proposed allocation. Use when the advisor suggests changes or asks 'what if I move X% into bonds/healthcare/cash?'. Provide `proposed_holdings` as a ticker-to-weight map; weights can be decimals or percentages and will be normalized automatically.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_id: { type: "string", description: "Client ID to compare" },
+          proposed_holdings: {
+            type: "object",
+            description: "Ticker to target weight map. Example: {\"MSFT\": 0.08, \"AAPL\": 0.06, \"AGG\": 0.25, \"BND\": 0.10, \"CASH\": 0.08}",
+            additionalProperties: { type: "number" }
+          },
+          years: { type: "number", description: "Monte Carlo horizon in years (default 3)" },
+          paths: { type: "number", description: "Monte Carlo path count (default 1000)" }
+        },
+        required: ["client_id", "proposed_holdings"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "generate_allocation_recommendation",
+      description: "Generate an advisor-ready recommended allocation for a client and immediately simulate the before/after impact. Use when the advisor asks for a safer allocation, a balanced rebalance, or a growth-oriented proposal.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_id: { type: "string", description: "Client ID for the recommendation" },
+          objective: {
+            type: "string",
+            enum: ["auto", "defensive", "balanced", "growth"],
+            description: "Recommendation objective. Use auto to infer from the client's risk profile."
+          }
+        },
+        required: ["client_id"]
+      }
+    }
   }
 ];
 
@@ -106,61 +169,6 @@ export const CHAT_TOOL_DEFINITIONS = [
 // ══════════════════════════════════════════════════════════════════════
 // TOOL IMPLEMENTATIONS
 // ══════════════════════════════════════════════════════════════════════
-
-const STRESS_SCENARIOS = {
-  "2008_crisis": {
-    name: "2008 Financial Crisis", desc: "Lehman collapse, S&P -57%",
-    shocks: { tech: -0.52, financials: -0.68, energy: -0.45, healthcare: -0.22, bonds: 0.08, commodities: 0.05, international: -0.55, cash: 0.0 }
-  },
-  "covid_crash": {
-    name: "2020 COVID Crash", desc: "Fastest bear market, -34%",
-    shocks: { tech: -0.22, financials: -0.40, energy: -0.52, healthcare: -0.18, bonds: 0.06, commodities: -0.35, international: -0.32, cash: 0.0 }
-  },
-  "2022_rate_shock": {
-    name: "2022 Rate Shock", desc: "Fed hikes 425bp, worst bond year",
-    shocks: { tech: -0.38, financials: -0.15, energy: 0.58, healthcare: -0.05, bonds: -0.16, commodities: 0.22, international: -0.20, cash: 0.02 }
-  },
-  "oil_spike": {
-    name: "Oil Spike +30%", desc: "OPEC+ surprise cut + supply shock",
-    shocks: { tech: -0.06, financials: -0.04, energy: 0.22, healthcare: 0.0, bonds: -0.03, commodities: 0.18, international: -0.04, cash: 0.0 }
-  },
-  "tech_selloff": {
-    name: "Tech Selloff -25%", desc: "AI bubble deflation / antitrust",
-    shocks: { tech: -0.25, financials: -0.05, energy: 0.02, healthcare: 0.03, bonds: 0.04, commodities: 0.0, international: -0.08, cash: 0.0 }
-  }
-};
-
-function runStressOnClient(client, scenarioKey) {
-  const sc = STRESS_SCENARIOS[scenarioKey];
-  if (!sc) return { error: `Unknown scenario: ${scenarioKey}` };
-
-  let impact = 0;
-  const holdingImpacts = [];
-  for (const [ticker, weight] of Object.entries(client.holdings)) {
-    const sector = TICKERS[ticker]?.sector ?? "cash";
-    const shock = sc.shocks[sector] ?? 0;
-    const hi = weight * shock;
-    impact += hi;
-    if (Math.abs(shock) > 0.01) {
-      holdingImpacts.push({
-        ticker, sector, weight_pct: (weight * 100).toFixed(1),
-        shock_pct: (shock * 100).toFixed(1),
-        impact_pct: (hi * 100).toFixed(2),
-        impact_dollar: Math.round(hi * client.portfolio_value)
-      });
-    }
-  }
-  holdingImpacts.sort((a, b) => Math.abs(parseFloat(b.impact_pct)) - Math.abs(parseFloat(a.impact_pct)));
-
-  return {
-    scenario: sc.name, description: sc.desc,
-    total_impact_pct: (impact * 100).toFixed(2),
-    total_impact_dollar: Math.round(impact * client.portfolio_value),
-    severity: impact < -0.25 ? "SEVERE" : impact < -0.10 ? "HIGH" : impact < -0.05 ? "MEDIUM" : "LOW",
-    holding_impacts: holdingImpacts.slice(0, 5)
-  };
-}
-
 
 const chatToolImplementations = {
 
@@ -270,9 +278,40 @@ const chatToolImplementations = {
     if (!client) return { error: `Client ${args.client_id} not found` };
 
     if (args.scenario === "all") {
-      return Object.keys(STRESS_SCENARIOS).map(key => runStressOnClient(client, key));
+      return runStressTestSuite(client);
     }
-    return runStressOnClient(client, args.scenario);
+    return runStressTest(client, args.scenario);
+  },
+
+  async run_monte_carlo_simulation(args) {
+    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    if (!client) return { error: `Client ${args.client_id} not found` };
+
+    return runMonteCarloSimulation(client, {
+      years: args.years,
+      paths: args.paths
+    });
+  },
+
+  async compare_portfolio_change(args) {
+    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    if (!client) return { error: `Client ${args.client_id} not found` };
+    if (!args.proposed_holdings || typeof args.proposed_holdings !== "object") {
+      return { error: "proposed_holdings is required" };
+    }
+
+    return comparePortfolioChange(client, args.proposed_holdings, {
+      years: args.years,
+      paths: args.paths,
+      label: "Advisor proposal"
+    });
+  },
+
+  async generate_allocation_recommendation(args) {
+    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    if (!client) return { error: `Client ${args.client_id} not found` };
+
+    return generateAllocationRecommendation(client, args.objective || "auto");
   }
 };
 
@@ -313,6 +352,12 @@ export function toolCallSummary(toolName, args) {
     case "run_stress_test":
       const scenarioLabel = args.scenario === "all" ? "all scenarios" : args.scenario?.replace(/_/g, " ");
       return `Running stress test: ${scenarioLabel} on ${clientName}`;
+    case "run_monte_carlo_simulation":
+      return `Running Monte Carlo simulation for ${clientName}`;
+    case "compare_portfolio_change":
+      return `Comparing current vs proposed allocation for ${clientName}`;
+    case "generate_allocation_recommendation":
+      return `Generating simulated rebalance recommendation for ${clientName}`;
     default:
       return `Calling ${toolName}`;
   }

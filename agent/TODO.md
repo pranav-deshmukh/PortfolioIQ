@@ -4,6 +4,179 @@
 
 ---
 
+## 🎯 Strategic Pivot After Reviewer Feedback
+
+> Reviewer feedback: insight generation from news is already covered by other platforms.  
+> The stronger differentiator is **AI copilot + portfolio simulations + advisor decision support**.
+
+### New Product Direction
+PortfolioIQ should be positioned as:
+
+**An AI copilot for wealth advisors that helps them discuss portfolio strategy, receive recommendations, simulate proposed changes, and compare outcomes before making decisions.**
+
+### Updated Core Workflow
+**Discuss → Recommend → Modify → Simulate → Compare → Decide**
+
+### What To De-emphasize
+- News insight generation as the main feature
+- Alerting as the primary value proposition
+- Static AI summaries of events
+
+### What To Emphasize
+- Conversational AI copilot for advisors
+- What-if portfolio analysis
+- Allocation change simulation
+- Stress testing and Monte Carlo simulation
+- Comparing current vs proposed portfolio
+- Explainable recommendations backed by quant outputs
+
+---
+
+## ✅ New Top Priorities
+
+### 1. AI Copilot for Advisor Discussion
+- Make chat/copilot the primary interaction model
+- Support questions like:
+  - “What are the biggest risks in this portfolio?”
+  - “Suggest a safer allocation for the next 3 months.”
+  - “What happens if I reduce tech by 10% and move to bonds?”
+  - “Compare current allocation vs your recommendation.”
+  - “Simulate this portfolio in a recession scenario.”
+
+### 2. Simulation Engine as Core Feature
+Focus implementation around advisor-driven simulations instead of only event insights.
+
+#### Must-have simulations
+- **Stress tests**
+  - recession
+  - rate hike
+  - oil shock
+  - tech selloff
+  - geopolitical shock
+- **Monte Carlo simulation**
+  - 1,000 future paths
+  - P10 / P25 / P50 / P75 / P90 terminal values
+  - probability of positive outcome
+- **Correlation shock analysis**
+  - model diversification breakdown
+  - recompute stressed volatility
+- **Allocation change simulation**
+  - compare current vs proposed portfolio
+  - show risk-return tradeoff
+- **Event-aware simulation**
+  - evaluate proposed changes using current market/news context
+
+### 3. Recommendation → Simulation Loop
+Target user flow:
+1. Advisor opens client portfolio
+2. AI explains current risk/exposures
+3. AI suggests allocation changes or defensive actions
+4. Advisor edits or accepts proposal
+5. System runs simulations
+6. Dashboard shows before/after metrics and projected outcomes
+
+---
+
+## 🔧 New Implementation Tasks
+
+### 1. Portfolio Comparison Engine
+- **Status:** ❌ Missing
+- **What:** Compare current portfolio vs proposed portfolio
+- **Output:** Delta in VaR, volatility, drawdown, concentration, sector exposure, expected outcome
+- **Where:** `analytics_engine.js` + chat tool + dashboard compare view
+- **Effort:** 2–3 hrs
+
+### 2. Monte Carlo Simulation
+- **Status:** ❌ Not implemented
+- **What:** 1,000 simulated future portfolio paths using log-normal returns
+- **Math:** `drift = μ - σ²/2`, evolve over `years × 252` days using `exp(drift + σ × Z)`
+- **Output:** P10, P25, Median, P75, P90, probability of gain
+- **Where:** `analytics_engine.js` + new chat tool
+- **Effort:** 1–2 hrs
+
+### 3. Stress Tests in Automated Pipeline
+- **Status:** ✅ Available in chat, ❌ Missing in pipeline
+- **What:** Include stress test results in analytics output so AI copilot can proactively discuss them
+- **Where:** `analytics_engine.js`
+- **Effort:** 1 hr
+
+### 4. Correlation Shock Analysis
+- **Status:** ❌ Not implemented
+- **What:** Increase cross-sector correlations and recompute stressed volatility
+- **Output:** Current vol vs stressed vol
+- **Where:** `analytics_engine.js` + chat tool
+- **Effort:** 1–2 hrs
+
+### 5. Advisor-Editable Allocation Simulation
+- **Status:** ❌ Missing
+- **What:** Let advisor input revised weights/holdings and simulate immediately
+- **Output:** before/after metrics and projected outcomes
+- **Where:** chat tool + dashboard UI
+- **Effort:** 2–3 hrs
+
+### 6. AI Recommendation Engine
+- **Status:** ⚠️ Partial
+- **What:** AI suggests allocation changes based on:
+  - client risk profile
+  - sector concentration
+  - event exposure
+  - volatility / VaR / drawdown
+- **Output:** recommendation text + proposed allocation payload for simulation
+- **Where:** `agent.js` / `chat_tools.js`
+- **Effort:** 2 hrs
+
+### 7. Simulation Result Explanations
+- **Status:** ❌ Missing
+- **What:** AI should explain simulation output in advisor-friendly language
+- **Examples:**
+  - “This change reduces VaR by 18%.”
+  - “The portfolio becomes less exposed to rate hikes.”
+  - “Upside is slightly lower, but drawdown risk improves materially.”
+- **Where:** agent response generation
+- **Effort:** 1 hr
+
+---
+
+## 🖥️ Dashboard Priorities for Final Demo
+
+### Must-have
+- Chat-first copilot experience
+- Compare current vs proposed portfolio
+- Stress test output cards
+- Monte Carlo summary output
+- Before/after risk metrics
+- Advisor-editable allocation form
+
+### Nice-to-have
+- Charts for simulation paths and before/after comparison
+- Saved scenarios
+- Simulation history
+- Exportable recommendation summary
+
+---
+
+## 🎤 Presentation Repositioning
+
+### Updated problem statement
+Advisors need a fast and explainable way to test portfolio decisions before making changes for clients.
+
+### Updated solution statement
+PortfolioIQ is an AI copilot that helps advisors discuss portfolio strategy, receive recommendations, simulate the effect of changes, and compare outcomes before execution.
+
+### Strong one-line pitch
+**PortfolioIQ is an AI copilot that helps wealth advisors test portfolio decisions through simulations before acting.**
+
+### Demo flow to prioritize
+1. Open a client portfolio
+2. Ask AI copilot for current risks
+3. Ask for a safer or optimized allocation
+4. Accept/edit recommendation
+5. Run stress test + Monte Carlo + compare metrics
+6. Show before/after outcomes
+7. Conclude with explainable decision support for advisors
+
+---
+
 ## 🐛 Bugs to Fix (Quick Wins)
 
 ### 1. Bearish Sentiment Hint Ignored
@@ -11,29 +184,6 @@
 - **Issue:** The `raw_sentiment_hint` field on news events is never used. The loop body is empty — bearish events score identically to bullish ones with the same keywords.
 - **Fix:** When `raw_sentiment_hint === "bearish"`, amplify negative sector impacts by ~1.3× and dampen positive ones by ~0.7×. Inverse for `"bullish"`.
 - **Effort:** 15 min
-
-### 2. Pipeline Run Counters Always Zero
-- **File:** `pipeline.js`
-- **Issue:** `alerts_created` and `insights_created` are initialized to `0` but never incremented. Dashboard Pipeline Runs tab always shows "0 alerts, 0 insights."
-- **Fix:** After agent finishes, query DB for records created after `startedAt` and set the counts.
-- **Effort:** 15 min
-
-### 3. SSL Disabled Globally
-- **File:** `agent.js` (line 9)
-- **Issue:** `NODE_TLS_REJECT_UNAUTHORIZED = "0"` disables SSL for the entire Node process.
-- **Fix:** Scope to a custom HTTPS agent used only for OpenRouter fetch calls, or remove once corporate proxy issue is resolved.
-- **Effort:** 15 min
-
-### 4. fetchPipelineRuns Limit Not Passed
-- **File:** `dashboard/src/lib/api.ts` — `fetchPipelineRuns()`
-- **Issue:** The function accepts a `limit` param but never appends it to the URL query string.
-- **Fix:** Add `?limit=${limit}` to the fetch URL.
-- **Effort:** 2 min
-
-### 5. No `.env.example`
-- **Issue:** Project requires `OPENROUTER_API_KEY` and `MONGODB_URI` but there's no example file.
-- **Fix:** Create `agent/.env.example` with placeholder values.
-- **Effort:** 2 min
 
 ---
 

@@ -19,6 +19,51 @@ const HF_TIMEOUT_MS = 15000;  // 15s max wait
 // Sector order expected by the risk scorer model
 const RISK_SCORER_SECTORS = ["tech", "financials", "energy", "healthcare", "bonds", "commodities", "international"];
 
+export const STRESS_SCENARIOS = {
+  "2008_crisis": {
+    name: "2008 Financial Crisis",
+    desc: "Lehman collapse, S&P -57%",
+    shocks: { tech: -0.52, financials: -0.68, energy: -0.45, healthcare: -0.22, bonds: 0.08, commodities: 0.05, international: -0.55, cash: 0.0 }
+  },
+  "covid_crash": {
+    name: "2020 COVID Crash",
+    desc: "Fastest bear market, -34%",
+    shocks: { tech: -0.22, financials: -0.40, energy: -0.52, healthcare: -0.18, bonds: 0.06, commodities: -0.35, international: -0.32, cash: 0.0 }
+  },
+  "2022_rate_shock": {
+    name: "2022 Rate Shock",
+    desc: "Fed hikes 425bp, worst bond year",
+    shocks: { tech: -0.38, financials: -0.15, energy: 0.58, healthcare: -0.05, bonds: -0.16, commodities: 0.22, international: -0.20, cash: 0.02 }
+  },
+  "oil_spike": {
+    name: "Oil Spike +30%",
+    desc: "OPEC+ surprise cut + supply shock",
+    shocks: { tech: -0.06, financials: -0.04, energy: 0.22, healthcare: 0.0, bonds: -0.03, commodities: 0.18, international: -0.04, cash: 0.0 }
+  },
+  "tech_selloff": {
+    name: "Tech Selloff -25%",
+    desc: "AI bubble deflation / antitrust",
+    shocks: { tech: -0.25, financials: -0.05, energy: 0.02, healthcare: 0.03, bonds: 0.04, commodities: 0.0, international: -0.08, cash: 0.0 }
+  }
+};
+
+const DEFAULT_SECTOR_TICKERS = {
+  tech: ["MSFT", "AAPL", "NVDA", "AMZN"],
+  financials: ["JPM", "BAC"],
+  energy: ["XOM", "CVX"],
+  healthcare: ["JNJ", "PFE"],
+  bonds: ["AGG", "BND"],
+  commodities: ["GLD"],
+  international: ["VEA"],
+  cash: ["CASH"]
+};
+
+const RECOMMENDATION_PROFILES = {
+  defensive: { tech: 0.20, financials: 0.08, energy: 0.07, healthcare: 0.12, bonds: 0.30, commodities: 0.06, international: 0.12, cash: 0.05 },
+  balanced: { tech: 0.28, financials: 0.10, energy: 0.08, healthcare: 0.10, bonds: 0.22, commodities: 0.05, international: 0.12, cash: 0.05 },
+  growth: { tech: 0.40, financials: 0.12, energy: 0.07, healthcare: 0.08, bonds: 0.15, commodities: 0.03, international: 0.10, cash: 0.05 }
+};
+
 /**
  * Call the HF Spaces Portfolio Risk Scorer model.
  * Input: sector weights as 7 floats [tech, financials, energy, healthcare, bonds, commodities, international]
@@ -486,6 +531,312 @@ function getRiskDrivers(sectorExposure, volatility, beta, top3) {
   return drivers;
 }
 
+function sumObjectValues(obj) {
+  return Object.values(obj).reduce((sum, value) => sum + value, 0);
+}
+
+function normalizeHoldings(holdings) {
+  const entries = Object.entries(holdings || {})
+    .map(([ticker, weight]) => [ticker, Number(weight)])
+    .filter(([_, weight]) => Number.isFinite(weight) && weight > 0);
+
+  const total = entries.reduce((sum, [_, weight]) => sum + weight, 0);
+  if (total <= 0) {
+    throw new Error("Proposed holdings must include at least one positive weight");
+  }
+
+  return Object.fromEntries(
+    entries.map(([ticker, weight]) => [ticker, parseFloat((weight / total).toFixed(6))])
+  );
+}
+
+function buildPortfolioVariant(client, holdings, label = "Proposed") {
+  return {
+    ...client,
+    name: `${client.name} (${label})`,
+    holdings: normalizeHoldings(holdings)
+  };
+}
+
+function mean(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values) {
+  if (values.length < 2) return 0;
+  const avg = mean(values);
+  const variance = values.reduce((sum, value) => sum + (value - avg) ** 2, 0) / (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+function randomNormal(rand) {
+  const u1 = Math.max(rand(), 1e-9);
+  const u2 = Math.max(rand(), 1e-9);
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+function formatHoldingsForOutput(holdings, portfolioValue = null) {
+  return Object.entries(holdings)
+    .map(([ticker, weight]) => ({
+      ticker,
+      sector: TICKERS[ticker]?.sector || "unknown",
+      name: TICKERS[ticker]?.name || ticker,
+      weight_pct: parseFloat((weight * 100).toFixed(2)),
+      value: portfolioValue ? Math.round(weight * portfolioValue) : undefined
+    }))
+    .sort((a, b) => b.weight_pct - a.weight_pct);
+}
+
+function diffSectorExposure(currentExposure, proposedExposure) {
+  const sectors = new Set([...Object.keys(currentExposure || {}), ...Object.keys(proposedExposure || {})]);
+  return Object.fromEntries(
+    [...sectors].sort().map(sector => {
+      const current = currentExposure?.[sector] || 0;
+      const proposed = proposedExposure?.[sector] || 0;
+      return [sector, parseFloat((proposed - current).toFixed(1))];
+    })
+  );
+}
+
+function chooseRecommendationProfile(client, objective = "auto") {
+  if (objective && objective !== "auto" && RECOMMENDATION_PROFILES[objective]) {
+    return { objective, profile: RECOMMENDATION_PROFILES[objective] };
+  }
+
+  if (client.risk_tolerance === "conservative") {
+    return { objective: "defensive", profile: RECOMMENDATION_PROFILES.defensive };
+  }
+  if (client.risk_tolerance === "aggressive") {
+    return { objective: "growth", profile: RECOMMENDATION_PROFILES.growth };
+  }
+  return { objective: "balanced", profile: RECOMMENDATION_PROFILES.balanced };
+}
+
+function buildSectorBasedHoldings(client, sectorTargets) {
+  const normalizedTargets = normalizeHoldings(sectorTargets);
+  const proposed = {};
+
+  for (const [sector, sectorWeight] of Object.entries(normalizedTargets)) {
+    if (sectorWeight <= 0) continue;
+
+    const currentTickers = Object.entries(client.holdings)
+      .filter(([ticker]) => (TICKERS[ticker]?.sector || "other") === sector)
+      .map(([ticker, weight]) => ({ ticker, weight }));
+
+    const distribution = currentTickers.length > 0
+      ? currentTickers
+      : (DEFAULT_SECTOR_TICKERS[sector] || []).map(ticker => ({ ticker, weight: 1 }));
+
+    const totalWeight = distribution.reduce((sum, item) => sum + item.weight, 0) || distribution.length || 1;
+    for (const item of distribution) {
+      proposed[item.ticker] = (proposed[item.ticker] || 0) + sectorWeight * (item.weight / totalWeight);
+    }
+  }
+
+  return normalizeHoldings(proposed);
+}
+
+export function runStressTest(client, scenarioKey) {
+  const scenario = STRESS_SCENARIOS[scenarioKey];
+  if (!scenario) {
+    return { error: `Unknown scenario: ${scenarioKey}` };
+  }
+
+  let impact = 0;
+  const holdingImpacts = [];
+  for (const [ticker, weight] of Object.entries(client.holdings)) {
+    const sector = TICKERS[ticker]?.sector ?? "cash";
+    const shock = scenario.shocks[sector] ?? 0;
+    const holdingImpact = weight * shock;
+    impact += holdingImpact;
+
+    if (Math.abs(shock) > 0.01) {
+      holdingImpacts.push({
+        ticker,
+        sector,
+        weight_pct: parseFloat((weight * 100).toFixed(1)),
+        shock_pct: parseFloat((shock * 100).toFixed(1)),
+        impact_pct: parseFloat((holdingImpact * 100).toFixed(2)),
+        impact_dollar: Math.round(holdingImpact * client.portfolio_value)
+      });
+    }
+  }
+
+  holdingImpacts.sort((a, b) => Math.abs(b.impact_pct) - Math.abs(a.impact_pct));
+
+  return {
+    scenario_key: scenarioKey,
+    scenario: scenario.name,
+    description: scenario.desc,
+    total_impact_pct: parseFloat((impact * 100).toFixed(2)),
+    total_impact_dollar: Math.round(impact * client.portfolio_value),
+    severity: impact < -0.25 ? "SEVERE" : impact < -0.10 ? "HIGH" : impact < -0.05 ? "MEDIUM" : "LOW",
+    holding_impacts: holdingImpacts.slice(0, 5)
+  };
+}
+
+export function runStressTestSuite(client) {
+  const scenarios = Object.keys(STRESS_SCENARIOS).map(key => runStressTest(client, key));
+  const worstCase = [...scenarios].sort((a, b) => a.total_impact_pct - b.total_impact_pct)[0] || null;
+  return {
+    scenarios,
+    worst_case: worstCase
+  };
+}
+
+export function runMonteCarloSimulation(client, options = {}) {
+  const years = Math.max(1, Math.min(Number(options.years) || Math.min(client.time_horizon_years || 3, 3), 30));
+  const paths = Math.max(100, Math.min(Number(options.paths) || 1000, 5000));
+  const tradingDays = years * 252;
+
+  const historicalReturns = generatePortfolioReturns(client, 756);
+  const dailyMean = mean(historicalReturns);
+  const sigma = standardDeviation(historicalReturns);
+  const drift = dailyMean - (sigma ** 2) / 2;
+  const initialValue = Number(options.initial_value) || client.portfolio_value;
+  const rand = seededRand(9000 + client.client_id.charCodeAt(3) + years + paths);
+
+  const terminalValues = [];
+  for (let pathIndex = 0; pathIndex < paths; pathIndex++) {
+    let portfolioValue = initialValue;
+    for (let day = 0; day < tradingDays; day++) {
+      const shock = randomNormal(rand);
+      portfolioValue *= Math.exp(drift + sigma * shock);
+    }
+    terminalValues.push(portfolioValue);
+  }
+
+  const sorted = [...terminalValues].sort((a, b) => a - b);
+  const percentile = p => Math.round(percentileValue(sorted, p));
+  const probabilityGain = terminalValues.filter(value => value > initialValue).length / terminalValues.length;
+  const expectedTerminalValue = mean(terminalValues);
+
+  return {
+    years,
+    paths,
+    initial_value: Math.round(initialValue),
+    expected_terminal_value: Math.round(expectedTerminalValue),
+    expected_return_pct: parseFloat((((expectedTerminalValue / initialValue) - 1) * 100).toFixed(2)),
+    probability_of_gain_pct: parseFloat((probabilityGain * 100).toFixed(1)),
+    percentile_terminal_values: {
+      p10: percentile(0.10),
+      p25: percentile(0.25),
+      p50: percentile(0.50),
+      p75: percentile(0.75),
+      p90: percentile(0.90)
+    },
+    downside_loss_pct_p10: parseFloat((((percentile(0.10) / initialValue) - 1) * 100).toFixed(2)),
+    upside_gain_pct_p90: parseFloat((((percentile(0.90) / initialValue) - 1) * 100).toFixed(2)),
+    assumptions: {
+      daily_mean_return: parseFloat(dailyMean.toFixed(6)),
+      daily_volatility: parseFloat(sigma.toFixed(6)),
+      drift: parseFloat(drift.toFixed(6))
+    }
+  };
+}
+
+export async function comparePortfolioChange(client, proposedHoldings, options = {}) {
+  const proposedClient = buildPortfolioVariant(client, proposedHoldings, options.label || "Proposed");
+
+  const [currentRisk, proposedRisk] = await Promise.all([
+    computeVaR(client, options.severity || "LOW"),
+    computeVaR(proposedClient, options.severity || "LOW")
+  ]);
+
+  const monteCarloYears = options.years || Math.min(client.time_horizon_years || 3, 3);
+  const monteCarloPaths = options.paths || 1000;
+  const currentMonteCarlo = runMonteCarloSimulation(client, { years: monteCarloYears, paths: monteCarloPaths });
+  const proposedMonteCarlo = runMonteCarloSimulation(proposedClient, { years: monteCarloYears, paths: monteCarloPaths });
+
+  const improvements = [];
+  if (proposedRisk.var_95 < currentRisk.var_95) improvements.push("Lower VaR(95%)");
+  if (proposedRisk.volatility_pct < currentRisk.volatility_pct) improvements.push("Lower volatility");
+  if (proposedRisk.max_drawdown_pct > currentRisk.max_drawdown_pct) improvements.push("Shallower max drawdown");
+  if (proposedMonteCarlo.probability_of_gain_pct > currentMonteCarlo.probability_of_gain_pct) improvements.push("Higher probability of gain");
+
+  return {
+    client_id: client.client_id,
+    client_name: client.name,
+    current_portfolio: {
+      holdings: formatHoldingsForOutput(client.holdings, client.portfolio_value),
+      risk_metrics: currentRisk,
+      monte_carlo: currentMonteCarlo
+    },
+    proposed_portfolio: {
+      holdings: formatHoldingsForOutput(proposedClient.holdings, proposedClient.portfolio_value),
+      risk_metrics: proposedRisk,
+      monte_carlo: proposedMonteCarlo
+    },
+    delta: {
+      var_95: proposedRisk.var_95 - currentRisk.var_95,
+      var_99: proposedRisk.var_99 - currentRisk.var_99,
+      volatility_pct: parseFloat((proposedRisk.volatility_pct - currentRisk.volatility_pct).toFixed(2)),
+      max_drawdown_pct: parseFloat((proposedRisk.max_drawdown_pct - currentRisk.max_drawdown_pct).toFixed(2)),
+      risk_score: parseFloat((proposedRisk.risk_score - currentRisk.risk_score).toFixed(1)),
+      top_3_concentration_pct: parseFloat((proposedRisk.top_3_concentration_pct - currentRisk.top_3_concentration_pct).toFixed(1)),
+      probability_of_gain_pct: parseFloat((proposedMonteCarlo.probability_of_gain_pct - currentMonteCarlo.probability_of_gain_pct).toFixed(1)),
+      expected_return_pct: parseFloat((proposedMonteCarlo.expected_return_pct - currentMonteCarlo.expected_return_pct).toFixed(2)),
+      sector_exposure_pct: diffSectorExposure(currentRisk.sector_exposure, proposedRisk.sector_exposure)
+    },
+    interpretation: {
+      risk_improvements: improvements,
+      tradeoff: improvements.length >= 2
+        ? "Risk profile improves materially with manageable return trade-offs."
+        : "Changes are mixed; advisor should balance protection vs upside."
+    }
+  };
+}
+
+export async function generateAllocationRecommendation(client, objective = "auto") {
+  const currentConcentration = calculateConcentration(client);
+  const { objective: resolvedObjective, profile } = chooseRecommendationProfile(client, objective);
+  const proposedHoldings = buildSectorBasedHoldings(client, profile);
+  const comparison = await comparePortfolioChange(client, proposedHoldings, {
+    label: `Recommended ${resolvedObjective}`,
+    years: Math.min(client.time_horizon_years || 3, 3),
+    paths: 1000
+  });
+
+  const sectorAdjustments = Object.entries(profile)
+    .map(([sector, targetWeight]) => {
+      const currentWeight = currentConcentration.sectorExposure[sector] || 0;
+      return [sector, parseFloat(((targetWeight - currentWeight) * 100).toFixed(1))];
+    })
+    .filter(([_, delta]) => Math.abs(delta) >= 2)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .map(([sector, delta]) => `${delta > 0 ? "Increase" : "Reduce"} ${sector} by ${Math.abs(delta).toFixed(1)} pts`);
+
+  const holdingChanges = Object.entries(proposedHoldings)
+    .map(([ticker, newWeight]) => {
+      const currentWeight = client.holdings[ticker] || 0;
+      return {
+        ticker,
+        current_weight_pct: parseFloat((currentWeight * 100).toFixed(2)),
+        proposed_weight_pct: parseFloat((newWeight * 100).toFixed(2)),
+        delta_pct_points: parseFloat(((newWeight - currentWeight) * 100).toFixed(2))
+      };
+    })
+    .filter(change => Math.abs(change.delta_pct_points) >= 1.5)
+    .sort((a, b) => Math.abs(b.delta_pct_points) - Math.abs(a.delta_pct_points));
+
+  return {
+    client_id: client.client_id,
+    client_name: client.name,
+    objective: resolvedObjective,
+    rationale: [
+      `Recommendation profile aligned to ${resolvedObjective} objective for a ${client.risk_tolerance} client.`,
+      ...sectorAdjustments.slice(0, 5)
+    ],
+    sector_targets_pct: Object.fromEntries(
+      Object.entries(profile).map(([sector, weight]) => [sector, parseFloat((weight * 100).toFixed(1))])
+    ),
+    proposed_holdings: formatHoldingsForOutput(proposedHoldings, client.portfolio_value),
+    key_holding_changes: holdingChanges.slice(0, 8),
+    comparison
+  };
+}
+
 
 /**
  * Compute full risk metrics for a client portfolio.
@@ -769,10 +1120,21 @@ export async function runAnalytics(newsEvents) {
   const medCount = eventMetrics.filter(e => e.severity === "MEDIUM").length;
   const dominantSeverity = highCount > 0 ? "HIGH" : medCount > 0 ? "MEDIUM" : "LOW";
 
-  const clientImpacts = await Promise.all(CLIENTS.map(async client => ({
-    ...computePortfolioImpact(client, aggregatedSectorImpacts, avgConfidence),
-    var_metrics: await computeVaR(client, dominantSeverity)
-  })));
+  const clientImpacts = await Promise.all(CLIENTS.map(async client => {
+    const varMetrics = await computeVaR(client, dominantSeverity);
+    const stressTests = runStressTestSuite(client);
+    const monteCarlo = runMonteCarloSimulation(client, {
+      years: Math.min(client.time_horizon_years || 3, 3),
+      paths: 1000
+    });
+
+    return {
+      ...computePortfolioImpact(client, aggregatedSectorImpacts, avgConfidence),
+      var_metrics: varMetrics,
+      stress_tests: stressTests,
+      monte_carlo: monteCarlo
+    };
+  }));
 
   // Sort by absolute impact (most affected first)
   clientImpacts.sort((a, b) => Math.abs(b.total_impact_pct) - Math.abs(a.total_impact_pct));
