@@ -11,15 +11,20 @@ import { runPipeline } from "./pipeline.js";
 import { CLIENTS, TICKERS } from "./data/sample_data.js";
 import { computeVaR } from "./analytics_engine.js";
 import { CHAT_TOOL_DEFINITIONS, executeChatTool, toolCallSummary } from "./chat_tools.js";
+import { createClientMemory, loadClientMemory } from "./memory_manager.js";
+import { callLLM, streamLLM, makeToolResultMessage, isConfigured, getProviderName } from "./llm.js";
 import path from "path";
 import { fileURLToPath } from "url";
 
 // Disable SSL verification for development (handles certificate issues)
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const CHAT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+const MEMORY_RETRIEVAL_TOOL_NAMES = new Set([
+  "get_client_portfolio",
+  "get_client_insights",
+  "get_client_alerts",
+  "get_recent_news"
+]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -174,6 +179,34 @@ app.get("/api/clients/:clientId", async (req, res) => {
   }
 });
 
+app.get("/api/memory/:clientId", async (req, res) => {
+  try {
+    const memory = await loadClientMemory(req.params.clientId);
+    res.json(memory);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/memory/:clientId/create", async (req, res) => {
+  try {
+    const memory = await createClientMemory(req.params.clientId);
+    res.json({
+      success: true,
+      client_id: memory.client_id,
+      file_path: memory.file_path,
+      generated_at: memory.generated_at,
+      alerts_count: memory.alerts_count,
+      insights_count: memory.insights_count,
+      snapshot_count: memory.snapshot_count,
+      news_count: memory.news_count
+    });
+  } catch (err) {
+    console.error("[Server] Memory creation error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Manually trigger pipeline
 app.post("/api/pipeline/run", async (req, res) => {
   try {
@@ -191,26 +224,37 @@ app.post("/api/pipeline/run", async (req, res) => {
 
 // ── Chat Endpoint (SSE + Agentic Tool Calling) ───────────────────────
 
-const CHAT_SYSTEM_PROMPT = `You are an AI copilot for LPL Financial advisors. You help advisors understand how market events affect their client portfolios.
+const CHAT_SYSTEM_PROMPT = `You are an AI copilot for LPL Financial advisors. Your main job is to help advisors discuss portfolio strategy, recommend changes, simulate those changes, and explain the results clearly.
 
-You have access to tools that let you fetch portfolio data, insights, alerts, news, and run stress tests. ALWAYS use these tools to get data before answering — never make up numbers.
+You have access to tools that let you fetch portfolio data, alerts, news context, stress tests, Monte Carlo simulations, recommendation payloads, and before/after portfolio comparisons. ALWAYS use these tools to get data before answering — never make up numbers.
 
 ## Available clients:
 ${CLIENTS.map(c => `- ${c.client_id}: ${c.name} (${c.risk_tolerance}, $${c.portfolio_value.toLocaleString()})`).join("\n")}
 
 ## How to answer:
 1. First, call the relevant tools to get the data you need
-2. Then, synthesize the data into a clear, actionable answer
-3. Be specific with dollar amounts and percentages
-4. Consider the client's age, risk tolerance, and time horizon
-5. Provide talking points the advisor can use directly with the client
-6. Keep answers concise — advisors are busy
+2. If the advisor asks for a recommendation, generate a proposed allocation and discuss simulated before/after trade-offs
+3. If the advisor suggests manual changes, compare the current vs proposed allocation before answering
+4. Then synthesize the data into a clear, actionable answer
+5. Explain trade-offs: risk reduction, diversification, downside protection, and upside impact
+6. Be specific with dollar amounts and percentages
+7. Consider the client's age, risk tolerance, and time horizon
+8. Provide talking points the advisor can use directly with the client
+9. Keep answers concise — advisors are busy
+
+## Workflow to prefer:
+- Discuss current risks
+- Recommend a change
+- Simulate the recommendation
+- Explain before/after metrics
+- Give advisor-ready talking points
 
 ## Tool usage hints:
-- For questions about a specific client → get_client_portfolio + get_client_insights
-- For "who's most at risk" → get_all_clients_summary + get_client_alerts
-- For "what happened" → get_recent_news + get_client_insights
-- For "what if" scenarios → run_stress_test
+- For questions about a specific client → get_client_portfolio + get_client_alerts
+- For recent context → get_recent_news + get_client_insights
+- For what-if scenarios → run_stress_test or compare_portfolio_change
+- For future outcome ranges → run_monte_carlo_simulation
+- For allocation suggestions → generate_allocation_recommendation
 - Always check alerts when discussing risk`;
 
 /**
@@ -223,8 +267,8 @@ app.post("/api/chat", async (req, res) => {
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "message is required" });
   }
-  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "your_openrouter_api_key_here") {
-    return res.status(500).json({ error: "OPENROUTER_API_KEY not configured" });
+  if (!isConfigured()) {
+    return res.status(500).json({ error: `LLM not configured. Set LLM_PROVIDER and the matching API key in .env` });
   }
 
   // Set up SSE
@@ -235,8 +279,13 @@ app.post("/api/chat", async (req, res) => {
     "X-Accel-Buffering": "no"
   });
 
+  // Disable response buffering / compression so each write reaches the client immediately
+  res.flushHeaders();
+
   const sendEvent = (type, data) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    // Force TCP flush on Node — needed for SSE over proxies
+    if (typeof res.flush === "function") res.flush();
   };
 
   try {
@@ -244,15 +293,33 @@ app.post("/api/chat", async (req, res) => {
       ? CLIENTS.find(c => c.client_id === client_id)?.name || client_id
       : "All Clients";
 
+    const clientMemory = client_id ? await loadClientMemory(client_id) : null;
+    const needsFreshData = /\b(refresh|latest|live|current news|current alerts|updated|re-fetch)\b/i.test(message);
+    const availableTools = clientMemory?.exists && client_id && !needsFreshData
+      ? CHAT_TOOL_DEFINITIONS.filter(tool => !MEMORY_RETRIEVAL_TOOL_NAMES.has(tool.function.name))
+      : CHAT_TOOL_DEFINITIONS;
+
+    const memoryLoaded = !!(clientMemory?.exists && clientMemory.content);
     console.log(`[Chat] Query for "${clientLabel}": ${message.substring(0, 80)}...`);
+    console.log(`[Chat] Memory: ${memoryLoaded ? `LOADED (${clientMemory.updated_at})` : "NOT FOUND"} | Tools: ${availableTools.length}/${CHAT_TOOL_DEFINITIONS.length} | Fresh-data override: ${needsFreshData}`);
 
     // Build a lean system prompt — NO data stuffing
     let systemContent = CHAT_SYSTEM_PROMPT;
     if (client_id) {
       systemContent += `\n\nThe advisor is currently viewing client ${client_id}. Focus on this client unless they ask about others.`;
+      if (clientMemory?.exists && clientMemory.content) {
+        systemContent += `\n\nA persisted client memory snapshot is available. Use it as the default source of truth for this client and avoid calling portfolio/insight/alert/news retrieval tools unless the advisor explicitly asks for refresh, live/latest data, or information not present in memory.`;
+      }
     }
 
     const messages = [{ role: "system", content: systemContent }];
+
+    if (clientMemory?.exists && clientMemory.content) {
+      messages.push({
+        role: "system",
+        content: `Persisted client memory snapshot for ${client_id} (updated ${clientMemory.updated_at}):\n\n${clientMemory.content}`
+      });
+    }
 
     // Add conversation history (last 10 turns)
     const recentHistory = (history || []).slice(-10);
@@ -263,6 +330,44 @@ app.post("/api/chat", async (req, res) => {
     }
     messages.push({ role: "user", content: message });
 
+    // ── Helper: streaming LLM call via llm.js ──
+    async function streamFinalResponse() {
+      sendEvent("stream_start", {});
+
+      let fullContent = "";
+      const toolCalls = [];
+      let bufferedTokens = [];
+      let hasToolCalls = false;
+
+      for await (const event of streamLLM(messages, availableTools, { temperature: 0.3, maxTokens: 3000 })) {
+        if (event.type === "token") {
+          fullContent += event.content;
+          bufferedTokens.push(event.content);
+          // Flush tokens only if no tool calls have appeared
+          if (!hasToolCalls) {
+            for (const tok of bufferedTokens) {
+              sendEvent("token", { content: tok });
+            }
+            bufferedTokens = [];
+          }
+        } else if (event.type === "tool_call") {
+          hasToolCalls = true;
+          toolCalls.push(event.tool_call);
+        }
+      }
+
+      if (hasToolCalls) {
+        sendEvent("stream_end", {});
+      } else {
+        for (const tok of bufferedTokens) {
+          sendEvent("token", { content: tok });
+        }
+        sendEvent("stream_end", {});
+      }
+
+      return { content: fullContent, tool_calls: hasToolCalls ? toolCalls : null };
+    }
+
     // ── Agentic loop ──────────────────────────────────────────────
     let iterationCount = 0;
     const maxIterations = 10;
@@ -270,75 +375,54 @@ app.post("/api/chat", async (req, res) => {
     while (iterationCount < maxIterations) {
       iterationCount++;
 
-      const llmRes = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "http://localhost:3001",
-          "X-Title": "LPL Advisor Copilot Chat"
-        },
-        body: JSON.stringify({
-          model: CHAT_MODEL,
-          messages,
-          tools: CHAT_TOOL_DEFINITIONS,
-          tool_choice: "auto",
-          temperature: 0.3,
-          max_tokens: 3000
-        })
-      });
+      let choice, msg;
 
-      if (!llmRes.ok) {
-        const errText = await llmRes.text();
-        console.error(`[Chat] LLM error ${llmRes.status}:`, errText);
-        sendEvent("error", { message: `LLM API error: ${llmRes.status}` });
-        break;
-      }
+      try {
+        // First iteration or after tool results: try streaming
+        const streamResult = await streamFinalResponse();
 
-      const data = await llmRes.json();
-      const choice = data.choices?.[0];
-      if (!choice) {
-        sendEvent("error", { message: "No response from LLM" });
-        break;
-      }
+        if (streamResult.tool_calls && streamResult.tool_calls.length > 0) {
+          // LLM wants to call tools — handle them and loop back
+          msg = { role: "assistant", content: streamResult.content || null, tool_calls: streamResult.tool_calls };
+          messages.push(msg);
 
-      const msg = choice.message;
-      messages.push(msg);
+          for (const toolCall of streamResult.tool_calls) {
+            const toolName = toolCall.function.name;
+            let args;
+            try { args = JSON.parse(toolCall.function.arguments); } catch { args = {}; }
 
-      // ── Tool calls ────────────────────────────────────────────
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const toolCall of msg.tool_calls) {
-          const toolName = toolCall.function.name;
-          let args;
-          try { args = JSON.parse(toolCall.function.arguments); } catch { args = {}; }
+            const summary = toolCallSummary(toolName, args);
+            console.log(`[Chat] Tool: ${toolName}(${JSON.stringify(args).substring(0, 60)})`);
 
-          const summary = toolCallSummary(toolName, args);
-          console.log(`[Chat] Tool: ${toolName}(${JSON.stringify(args).substring(0, 60)})`);
+            // Block suppressed retrieval tools
+            if (memoryLoaded && !needsFreshData && MEMORY_RETRIEVAL_TOOL_NAMES.has(toolName)) {
+              console.log(`[Chat] ⛔ Blocked suppressed tool: ${toolName} (memory is loaded)`);
+              const blockedResult = { _blocked: true, reason: "This tool is not available because client memory is already loaded. Use the memory content instead." };
+              messages.push(makeToolResultMessage(toolCall.id, toolName, blockedResult));
+              sendEvent("tool_result", { name: toolName, summary: "Skipped (using memory)", preview: "Using cached memory" });
+              continue;
+            }
 
-          // Stream: tool call started
-          sendEvent("tool_call", { name: toolName, args, summary });
+            sendEvent("tool_call", { name: toolName, args, summary });
 
-          // Execute
-          const result = await executeChatTool(toolName, args);
+            const result = await executeChatTool(toolName, args);
 
-          // Stream: tool result
-          const resultPreview = JSON.stringify(result).substring(0, 200);
-          sendEvent("tool_result", { name: toolName, summary, preview: resultPreview });
+            const resultPreview = JSON.stringify(result).substring(0, 200);
+            sendEvent("tool_result", { name: toolName, summary, preview: resultPreview });
 
-          // Feed back to LLM
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result)
-          });
+            messages.push(makeToolResultMessage(toolCall.id, toolName, result));
+          }
+          // Continue loop — next iteration will stream the final answer
+          continue;
         }
-      }
 
-      // ── Done (no more tool calls) ─────────────────────────────
-      if (choice.finish_reason === "stop" || !msg.tool_calls || msg.tool_calls.length === 0) {
-        const reply = msg.content || "";
-        console.log(`[Chat] Done in ${iterationCount} iteration(s): ${reply.substring(0, 100)}...`);
-        sendEvent("response", { content: reply });
+        // No tool calls — text was already streamed token-by-token
+        console.log(`[Chat] Done in ${iterationCount} iteration(s): ${(streamResult.content || "").substring(0, 100)}...`);
+        break;
+
+      } catch (err) {
+        console.error(`[Chat] LLM error:`, err.message);
+        sendEvent("error", { message: err.message });
         break;
       }
     }
@@ -369,6 +453,7 @@ async function start() {
 
   app.listen(PORT, () => {
     console.log(`\n[Server] Running at http://localhost:${PORT}`);
+    console.log(`[Server] LLM provider: ${getProviderName()}`);
     console.log(`[Server] Pipeline interval: ${INTERVAL_HOURS}h`);
     console.log(`[Server] Dashboard: http://localhost:${PORT}\n`);
   });

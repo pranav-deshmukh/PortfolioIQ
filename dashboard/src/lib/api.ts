@@ -58,6 +58,35 @@ export async function dismissAlert(alertId: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to dismiss alert: ${res.status}`);
 }
 
+export interface ClientMemoryResponse {
+  success?: boolean;
+  client_id: string;
+  file_path: string;
+  generated_at?: string;
+  updated_at?: string;
+  alerts_count?: number;
+  insights_count?: number;
+  snapshot_count?: number;
+  news_count?: number;
+  exists?: boolean;
+  content?: string | null;
+}
+
+export async function createClientMemory(clientId: string): Promise<ClientMemoryResponse> {
+  const res = await fetch(`/api/memory/${clientId}/create`, {
+    method: "POST",
+    headers,
+  });
+  if (!res.ok) throw new Error(`Failed to create memory: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchClientMemory(clientId: string): Promise<ClientMemoryResponse> {
+  const res = await fetch(`/api/memory/${clientId}`);
+  if (!res.ok) throw new Error(`Failed to fetch memory: ${res.status}`);
+  return res.json();
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -83,6 +112,19 @@ export interface ResponseEvent {
   content: string;
 }
 
+export interface TokenEvent {
+  type: "token";
+  content: string;
+}
+
+export interface StreamStartEvent {
+  type: "stream_start";
+}
+
+export interface StreamEndEvent {
+  type: "stream_end";
+}
+
 export interface ErrorEvent {
   type: "error";
   message: string;
@@ -96,6 +138,9 @@ export type ChatSSEEvent =
   | ToolCallEvent
   | ToolResultEvent
   | ResponseEvent
+  | TokenEvent
+  | StreamStartEvent
+  | StreamEndEvent
   | ErrorEvent
   | DoneEvent;
 
@@ -103,6 +148,9 @@ export interface StreamChatCallbacks {
   onToolCall: (event: ToolCallEvent) => void;
   onToolResult: (event: ToolResultEvent) => void;
   onResponse: (content: string) => void;
+  onToken: (content: string) => void;
+  onStreamStart: () => void;
+  onStreamEnd: () => void;
   onError: (message: string) => void;
   onDone: () => void;
 }
@@ -163,6 +211,15 @@ export function streamChatMessage(
                 break;
               case "response":
                 callbacks.onResponse(event.content);
+                break;
+              case "token":
+                callbacks.onToken(event.content);
+                break;
+              case "stream_start":
+                callbacks.onStreamStart();
+                break;
+              case "stream_end":
+                callbacks.onStreamEnd();
                 break;
               case "error":
                 callbacks.onError(event.message);

@@ -1,6 +1,6 @@
 // ── AI Agent ──────────────────────────────────────────────────────────
-// The brain: takes analytics metrics, uses OpenRouter LLM to connect dots,
-// calls tools to create alerts and save insights per client.
+// The brain: takes analytics metrics, uses LLM (Gemini or OpenRouter)
+// to connect dots, calls tools to create alerts and save insights.
 
 import dotenv from "dotenv";
 dotenv.config();
@@ -10,16 +10,13 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import { TOOL_DEFINITIONS, executeTool } from "./tools.js";
 import { CLIENTS } from "./data/sample_data.js";
-
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "nvidia/nemotron-3-super-120b-a12b:free";  // free tier on OpenRouter
+import { callLLMWithRetry, getProviderName } from "./llm.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // SYSTEM PROMPT
 // ══════════════════════════════════════════════════════════════════════
 
-const SYSTEM_PROMPT = `You are an AI financial advisor copilot agent for LPL Financial advisors. Your job is to analyze market events and their computed impact metrics, connect the dots across client portfolios, and produce actionable insights.
+const SYSTEM_PROMPT = `You are an AI financial advisor copilot agent for LPL Financial advisors. Your job is to analyze market events and their computed impact metrics, connect the dots across client portfolios, and produce actionable advisor decision support.
 
 ## Your Responsibilities:
 1. ANALYZE the event metrics and sector impacts provided to you
@@ -27,7 +24,8 @@ const SYSTEM_PROMPT = `You are an AI financial advisor copilot agent for LPL Fin
 3. For EACH client portfolio, determine:
    - How are they specifically affected given their holdings?
    - Does this breach their risk tolerance?
-   - What should the advisor tell them?
+  - What should the advisor tell them?
+  - What simulations or defensive moves should the advisor discuss?
 4. CREATE ALERTS for clients with significant exposure (use the create_alert tool)
 5. SAVE INSIGHTS for every client (use the save_client_insight tool) — even if the impact is minimal, the advisor needs to know "this client is fine"
 
@@ -40,7 +38,7 @@ const SYSTEM_PROMPT = `You are an AI financial advisor copilot agent for LPL Fin
 ## Insight Guidelines:
 - Be specific with numbers (e.g., "Your 10% energy allocation gains ~$12,000")
 - Explain causal relationships clearly
-- Provide actionable recommendations
+- Provide actionable recommendations and next-step simulations
 - Include talking points the advisor can use verbatim with the client
 - Rate urgency: high (act today), medium (this week), low (next review)
 
@@ -50,67 +48,13 @@ const SYSTEM_PROMPT = `You are an AI financial advisor copilot agent for LPL Fin
 - Consider the client's age, risk tolerance, and time horizon in your recommendations
 - For conservative/retirement-focused clients, be more cautious
 - For aggressive/young clients, frame opportunities alongside risks
+- Use stress test and Monte Carlo outputs to explain downside ranges and probability-weighted outcomes when available
 
 You MUST call tools for every client. Save insights for ALL clients and create alerts where warranted.`;
 
 
-// ══════════════════════════════════════════════════════════════════════  
-// LLM CALL
+// LLM CALL (delegated to llm.js)
 // ══════════════════════════════════════════════════════════════════════
-
-async function callLLM(messages, tools = null) {
-  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "your_openrouter_api_key_here") {
-    throw new Error("OPENROUTER_API_KEY not set. Add it to agent/.env");
-  }
-
-  const body = {
-    model: MODEL,
-    messages,
-    temperature: 0.3,
-    max_tokens: 8000
-  };
-  if (tools && tools.length > 0) {
-    body.tools = tools;
-    body.tool_choice = "auto";
-  }
-
-  // Retry up to 2 times on empty/failed responses (free models are flaky)
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const res = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "http://localhost:3001",
-          "X-Title": "LPL Advisor Copilot Agent"
-        },
-        body: JSON.stringify(body)
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[Agent] HTTP ${res.status}:`, errText);
-        if (attempt < 2) { console.log(`[Agent] Retrying... (attempt ${attempt + 1})`); await new Promise(r => setTimeout(r, 2000)); continue; }
-        throw new Error(`OpenRouter API error ${res.status}: ${errText}`);
-      }
-
-      const json = await res.json();
-
-      // Check for empty response (common with free models)
-      if (!json.choices || json.choices.length === 0) {
-        console.error(`[Agent] Empty choices from LLM. Error:`, json.error || "none");
-        if (attempt < 2) { console.log(`[Agent] Retrying... (attempt ${attempt + 1})`); await new Promise(r => setTimeout(r, 3000)); continue; }
-      }
-
-      return json;
-    } catch (err) {
-      console.error(`[Agent] Fetch error (attempt ${attempt}):`, err.message);
-      if (attempt < 2) { await new Promise(r => setTimeout(r, 2000)); continue; }
-      throw err;
-    }
-  }
-}
 
 
 // ══════════════════════════════════════════════════════════════════════
@@ -122,8 +66,9 @@ async function callLLM(messages, tools = null) {
  * The agent will analyze, call tools (create_alert, save_insight), and produce a summary.
  */
 export async function runAgent(analyticsResults) {
+  const providerName = getProviderName();
   console.log(`\n[Agent] Starting AI analysis...`);
-  console.log(`[Agent] Model: ${MODEL}`);
+  console.log(`[Agent] LLM provider: ${providerName}`);
 
   // Build the user message with all analytics data
   const userMessage = buildUserMessage(analyticsResults);
@@ -141,24 +86,25 @@ export async function runAgent(analyticsResults) {
     iterationCount++;
     console.log(`[Agent] Iteration ${iterationCount}...`);
 
-    const response = await callLLM(messages, TOOL_DEFINITIONS);
-    const choice = response.choices?.[0];
+    const result = await callLLMWithRetry(messages, TOOL_DEFINITIONS, { maxTokens: 8000 });
 
-    if (!choice) {
+    if (!result.content && !result.tool_calls) {
       console.error("[Agent] No response from LLM");
       break;
     }
 
-    const msg = choice.message;
+    // Build an assistant message in the shape the conversation expects
+    const msg = { role: "assistant", content: result.content || null };
+    if (result.tool_calls) msg.tool_calls = result.tool_calls;
 
     // Add assistant message to conversation
     messages.push(msg);
 
     // Check if there are tool calls
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      console.log(`[Agent] ${msg.tool_calls.length} tool call(s) to execute`);
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      console.log(`[Agent] ${result.tool_calls.length} tool call(s) to execute`);
 
-      for (const toolCall of msg.tool_calls) {
+      for (const toolCall of result.tool_calls) {
         const toolName = toolCall.function.name;
         let args;
         try {
@@ -168,20 +114,21 @@ export async function runAgent(analyticsResults) {
           console.error(`[Agent] Failed to parse args for ${toolName}`);
         }
 
-        const result = await executeTool(toolName, args);
+        const toolResult = await executeTool(toolName, args);
 
         // Add tool result to conversation
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: JSON.stringify(result)
+          content: JSON.stringify(toolResult),
+          _toolName: toolName
         });
       }
     }
 
     // Check if the agent is done (no more tool calls, or finish_reason is "stop")
-    if (choice.finish_reason === "stop" || (!msg.tool_calls || msg.tool_calls.length === 0)) {
-      finalSummary = msg.content || "";
+    if (result.finish_reason === "stop" || (!result.tool_calls || result.tool_calls.length === 0)) {
+      finalSummary = result.content || "";
       console.log(`[Agent] Finished after ${iterationCount} iterations`);
       break;
     }
@@ -194,7 +141,7 @@ export async function runAgent(analyticsResults) {
   return {
     summary: finalSummary,
     iterations: iterationCount,
-    model: MODEL
+    model: providerName
   };
 }
 
@@ -235,6 +182,12 @@ function buildUserMessage(analytics) {
     msg += `- Threshold (${ci.risk_tolerance}): ±${ci.threshold_pct}% → ${ci.exceeds_threshold ? "⚠️ BREACHED" : "✅ Within limits"}\n`;
     msg += `- VaR(95%): $${ci.var_metrics.var_95.toLocaleString()} | VaR(99%): $${ci.var_metrics.var_99.toLocaleString()} | CVaR: $${ci.var_metrics.cvar_95.toLocaleString()}\n`;
     msg += `- Volatility: ${ci.var_metrics.volatility_pct}% | Beta: ${ci.var_metrics.beta} | Max Drawdown: ${ci.var_metrics.max_drawdown_pct}% | Risk Level: ${ci.var_metrics.risk_level}\n`;
+    if (ci.stress_tests?.worst_case) {
+      msg += `- Worst stress test: ${ci.stress_tests.worst_case.scenario} → ${ci.stress_tests.worst_case.total_impact_pct}% ($${ci.stress_tests.worst_case.total_impact_dollar.toLocaleString()})\n`;
+    }
+    if (ci.monte_carlo) {
+      msg += `- Monte Carlo (${ci.monte_carlo.years}y, ${ci.monte_carlo.paths} paths): P10=$${ci.monte_carlo.percentile_terminal_values.p10.toLocaleString()} | Median=$${ci.monte_carlo.percentile_terminal_values.p50.toLocaleString()} | P90=$${ci.monte_carlo.percentile_terminal_values.p90.toLocaleString()} | Prob gain=${ci.monte_carlo.probability_of_gain_pct}%\n`;
+    }
     if (ci.var_metrics.risk_drivers && ci.var_metrics.risk_drivers.length > 0) {
       msg += `- Risk drivers: ${ci.var_metrics.risk_drivers.join("; ")}\n`;
     }

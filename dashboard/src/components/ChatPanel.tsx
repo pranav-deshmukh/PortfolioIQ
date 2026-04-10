@@ -2,10 +2,10 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { ReactNode } from "react";
-import { BarChart3, Lightbulb, Bell, Users, Newspaper, FlaskConical, Wrench, Bot, MessageSquareText, Check, SendHorizonal } from "lucide-react";
+import { BarChart3, Lightbulb, Bell, Users, Newspaper, FlaskConical, Wrench, Bot, MessageSquareText, Check, SendHorizonal, GitCompareArrows, TrendingUp, DatabaseZap } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import type { ChatMessage } from "@/lib/api";
-import { streamChatMessage } from "@/lib/api";
+import { createClientMemory, fetchClientMemory, streamChatMessage } from "@/lib/api";
 
 // ── Tool step shown in the UI while the agent works ──────────────────
 interface ToolStep {
@@ -25,17 +25,65 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toolSteps, setToolSteps] = useState<ToolStep[]>([]);
+  const [memoryStatus, setMemoryStatus] = useState<string | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const prevClientRef = useRef<string | null>(clientId);
   const abortRef = useRef<AbortController | null>(null);
+
+  // ── Typewriter queue — smooth reveal even when tokens arrive in bulk ──
+  const tokenQueueRef = useRef<string[]>([]);
+  const typewriterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamDoneRef = useRef(false);
+  const finalizedRef = useRef(false);  // guard: only finalize once per stream
+
+  /** Drain up to N chars from the token queue each tick */
+  const startTypewriter = useCallback(() => {
+    if (typewriterTimerRef.current) return; // already running
+    const CHARS_PER_TICK = 3;
+    const TICK_MS = 18; // ~55 chars/sec, feels natural
+    typewriterTimerRef.current = setInterval(() => {
+      const queue = tokenQueueRef.current;
+      if (queue.length === 0) {
+        if (streamDoneRef.current) {
+          // Queue drained and stream finished — stop timer
+          clearInterval(typewriterTimerRef.current!);
+          typewriterTimerRef.current = null;
+          // Finalize: move streamed content into messages (once only)
+          if (!finalizedRef.current) {
+            finalizedRef.current = true;
+            setStreamingContent((prev) => {
+              if (prev) {
+                setMessages((msgs) => [...msgs, { role: "assistant", content: prev }]);
+              }
+              return null;
+            });
+          }
+        }
+        return;
+      }
+      const chunk = queue.splice(0, CHARS_PER_TICK).join("");
+      setStreamingContent((prev) => (prev ?? "") + chunk);
+    }, TICK_MS);
+  }, []);
+
+  const stopTypewriter = useCallback(() => {
+    if (typewriterTimerRef.current) {
+      clearInterval(typewriterTimerRef.current);
+      typewriterTimerRef.current = null;
+    }
+    tokenQueueRef.current = [];
+    streamDoneRef.current = false;
+  }, []);
 
   // Auto-scroll to bottom on new messages / tool steps
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, loading, toolSteps]);
+  }, [messages, loading, toolSteps, streamingContent]);
 
   // Insert a divider when client selection changes
   useEffect(() => {
@@ -53,8 +101,57 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
 
   // Clean up on unmount
   useEffect(() => {
-    return () => abortRef.current?.abort();
-  }, []);
+    return () => {
+      abortRef.current?.abort();
+      stopTypewriter();
+    };
+  }, [stopTypewriter]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadMemoryStatus() {
+      if (!clientId) {
+        setMemoryStatus(null);
+        return;
+      }
+
+      try {
+        const memory = await fetchClientMemory(clientId);
+        if (!active) return;
+        setMemoryStatus(memory.exists ? `Memory ready (${memory.updated_at ? new Date(memory.updated_at).toLocaleString() : "saved"})` : "No memory yet");
+      } catch {
+        if (active) setMemoryStatus("Memory unavailable");
+      }
+    }
+
+    loadMemoryStatus();
+    return () => {
+      active = false;
+    };
+  }, [clientId]);
+
+  const handleCreateMemory = useCallback(async () => {
+    if (!clientId || memoryBusy) return;
+
+    try {
+      setMemoryBusy(true);
+      setError(null);
+      const result = await createClientMemory(clientId);
+      setMemoryStatus(`Memory ready (${result.generated_at ? new Date(result.generated_at).toLocaleString() : "saved"})`);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Created memory for **${clientLabel}**. I can now answer from the saved client context first instead of refetching insights, alerts, and news every time.`
+        }
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create memory");
+    } finally {
+      setMemoryBusy(false);
+    }
+  }, [clientId, clientLabel, memoryBusy]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -91,7 +188,35 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
         );
       },
 
+      onStreamStart() {
+        streamDoneRef.current = false;
+        finalizedRef.current = false;
+        tokenQueueRef.current = [];
+        setStreamingContent("");
+        startTypewriter();
+      },
+
+      onToken(content) {
+        // Push chars to the typewriter queue — it drains them smoothly
+        tokenQueueRef.current.push(...content.split(""));
+      },
+
+      onStreamEnd() {
+        // If no tokens ever arrived (tool-call iteration), just clean up
+        // without creating an empty message bubble.
+        if (tokenQueueRef.current.length === 0) {
+          stopTypewriter();
+          setStreamingContent(null);
+          finalizedRef.current = true;   // nothing to finalize
+          return;
+        }
+        // Signal the typewriter to finalize after draining remaining chars
+        streamDoneRef.current = true;
+      },
+
       onResponse(content) {
+        // Fallback for non-streaming responses
+        setStreamingContent(null);
         setMessages((prev) => [...prev, { role: "assistant", content }]);
       },
 
@@ -100,12 +225,23 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
       },
 
       onDone() {
+        streamDoneRef.current = true;
+        // Only finalize if typewriter hasn't already done it
+        if (!finalizedRef.current && !typewriterTimerRef.current) {
+          finalizedRef.current = true;
+          setStreamingContent((prev) => {
+            if (prev) {
+              setMessages((msgs) => [...msgs, { role: "assistant", content: prev }]);
+            }
+            return null;
+          });
+        }
         setLoading(false);
         setToolSteps([]);
         inputRef.current?.focus();
       },
     });
-  }, [input, loading, messages, clientId]);
+  }, [input, loading, messages, clientId, startTypewriter]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -124,6 +260,9 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
       get_all_clients_summary: <Users className={cls} />,
       get_recent_news: <Newspaper className={cls} />,
       run_stress_test: <FlaskConical className={cls} />,
+      run_monte_carlo_simulation: <TrendingUp className={cls} />,
+      compare_portfolio_change: <GitCompareArrows className={cls} />,
+      generate_allocation_recommendation: <Lightbulb className={cls} />,
     };
     return map[name] || <Wrench className={cls} />;
   };
@@ -136,10 +275,28 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
           <Bot className="h-4 w-4 text-blue-600" />
           <span className="text-sm font-semibold text-slate-800">AI Copilot</span>
         </div>
-        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold text-blue-600">
-          {clientLabel}
-        </span>
+        <div className="flex items-center gap-2">
+          {clientId && (
+            <button
+              onClick={handleCreateMemory}
+              disabled={memoryBusy}
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-600 transition hover:border-blue-300 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <DatabaseZap className="h-3 w-3" />
+              {memoryBusy ? "Creating…" : "Create Memory"}
+            </button>
+          )}
+          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold text-blue-600">
+            {clientLabel}
+          </span>
+        </div>
       </div>
+
+      {clientId && memoryStatus && (
+        <div className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[10px] text-slate-500">
+          {memoryStatus}
+        </div>
+      )}
 
       {/* ── Messages ───────────────────────────────────────────────── */}
       <div
@@ -157,14 +314,14 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
             <div className="mt-2 space-y-1">
               {(clientId
                 ? [
-                    "How exposed are they to tech?",
-                    "What should I tell them about recent events?",
-                    "Summarize their risk posture",
+                    "What are the biggest risks in this portfolio?",
+                    "Suggest a safer allocation and simulate the result",
+                    "Compare the current portfolio vs a more defensive version",
                   ]
                 : [
-                    "Which clients are most at risk?",
-                    "Run a recession scenario across all portfolios",
-                    "Who has the highest tech concentration?",
+                    "Which clients need a defensive rebalance right now?",
+                    "Who has the weakest downside profile under stress tests?",
+                    "Which clients are too concentrated in tech?",
                   ]
               ).map((q) => (
                 <button
@@ -245,7 +402,7 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
         )}
 
         {/* Loading indicator (when waiting for LLM but no tool steps yet) */}
-        {loading && toolSteps.length === 0 && (
+        {loading && toolSteps.length === 0 && streamingContent === null && (
           <div className="flex justify-start">
             <div className="rounded-xl bg-slate-100 px-4 py-3 text-xs text-slate-400">
               <span className="inline-flex gap-1">
@@ -253,6 +410,17 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
                 <span className="animate-bounce" style={{ animationDelay: "0.15s" }}>●</span>
                 <span className="animate-bounce" style={{ animationDelay: "0.3s" }}>●</span>
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* Live streaming response (token-by-token like ChatGPT) */}
+        {streamingContent !== null && (
+          <div className="flex justify-start">
+            <div className="max-w-[90%] rounded-xl bg-slate-100 px-3.5 py-2.5 text-xs leading-relaxed text-slate-700">
+              <div className="chat-prose">
+                <ReactMarkdown>{streamingContent || "▍"}</ReactMarkdown>
+              </div>
             </div>
           </div>
         )}
