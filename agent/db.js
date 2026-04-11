@@ -3,8 +3,8 @@ import { MongoClient } from "mongodb";
 import dotenv from "dotenv";
 dotenv.config();
 
-const MONGO_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/lpl_copilot";
-const DB_NAME = "lpl_copilot";
+const MONGO_URI = process.env.MONGODB_URI || "mongodb+srv://vns444555_db_user:gw3cpBkxCvqHOgqk@cluster-main.imjr9lg.mongodb.net/portfolio-db?appName=Cluster-main";
+const DB_NAME = process.env.MONGO_DB_NAME || "portfolio-db";
 
 let client;
 let db;
@@ -147,4 +147,79 @@ export async function closeConnection() {
     await client.close();
     console.log("[DB] Connection closed");
   }
+}
+
+// ── Load client portfolios from MongoDB ──────────────────────────────
+
+// Map DB sector names → internal lowercase keys used by analytics engine
+const SECTOR_NORMALIZE = {
+  "technology": "tech",
+  "finance": "financials",
+  "energy": "energy",
+  "healthcare": "healthcare",
+  "fixed income": "bonds",
+  "international": "international",
+  "cash": "cash",
+  "consumer staples": "consumer_staples",
+  "real estate": "real_estate",
+  "commodities": "commodities",
+};
+
+// Map DB risk_tolerance → internal risk tolerance keys used by RISK_THRESHOLDS
+const RISK_TOLERANCE_MAP = {
+  low: "conservative",
+  medium: "moderate",
+  high: "aggressive",
+};
+
+function normalizeSector(sector) {
+  return SECTOR_NORMALIZE[sector.toLowerCase()] || sector.toLowerCase();
+}
+
+let clientsCache = null;
+
+/**
+ * Load client portfolios from the MongoDB `portfolios` collection.
+ * Normalizes sector names and risk tolerance to match internal conventions.
+ * Caches the result so subsequent calls are instant.
+ */
+export async function loadClients() {
+  const database = await getDB();
+  const portfolios = await database.collection("portfolios").find({}).toArray();
+
+  clientsCache = portfolios.map(p => ({
+    client_id: p.client_id,
+    name: p.client_name,
+    age: null,
+    portfolio_value: p.portfolio_value,
+    risk_tolerance: RISK_TOLERANCE_MAP[p.risk_tolerance] || p.risk_tolerance,
+    time_horizon_years: p.time_horizon_years,
+    holdings: (p.holdings || []).map(h => ({
+      symbol: h.symbol,
+      name: h.name,
+      sector: normalizeSector(h.sector),
+      weight: h.weight,
+      purchase_price: h.purchase_price,
+      current_price: h.current_price,
+      quantity: h.quantity,
+    })),
+  }));
+
+  console.log(`[DB] Loaded ${clientsCache.length} client portfolios from MongoDB`);
+  return clientsCache;
+}
+
+/**
+ * Get cached clients (must call loadClients() first at startup).
+ */
+export function getClients() {
+  if (!clientsCache) throw new Error("Clients not loaded yet. Call loadClients() after connectDB().");
+  return clientsCache;
+}
+
+/**
+ * Force-refresh the clients cache from DB.
+ */
+export async function refreshClients() {
+  return loadClients();
 }

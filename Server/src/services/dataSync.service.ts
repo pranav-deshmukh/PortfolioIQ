@@ -12,6 +12,7 @@ interface SyncSummary {
   purchasePriceBackfilled: number;
   latestPricesFetched: number;
   newsEventsStored: number;
+  newsEventsSaved: Record<string, unknown>[];
   macroSaved: boolean;
   timestamp: string;
 }
@@ -32,45 +33,106 @@ function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+// ── Article dedup helpers ─────────────────────────────────────────────
+
 function getArticleUniqKey(article: Record<string, unknown>): string | undefined {
   const articleId = asOptionalString(article.article_id);
-  const sourceId = asOptionalString(article.source_id);
   const link = asOptionalString(article.link);
   const title = asOptionalString(article.title);
   const pubDate = asOptionalString(article.pubDate);
 
-  if (articleId && sourceId) {
-    return `id:${articleId}|src:${sourceId}`;
-  }
-
-  if (link) {
-    return `link:${link}`;
-  }
-
-  if (title && pubDate) {
-    return `title:${title}|date:${pubDate}`;
-  }
-
+  if (articleId) return `aid:${articleId}`;
+  if (link) return `link:${link}`;
+  if (title && pubDate) return `title:${title}|date:${pubDate}`;
   return undefined;
 }
 
 function getArticleMongoFilter(article: Record<string, unknown>) {
   const articleId = asOptionalString(article.article_id);
-  const sourceId = asOptionalString(article.source_id);
   const link = asOptionalString(article.link);
   const title = asOptionalString(article.title);
+
+  if (articleId) return { _article_id: articleId };
+  if (link) return { _link: link };
+  return { headline: title };
+}
+
+// ── News article → agent-compatible event transformation ──────────────
+
+function inferCategory(article: Record<string, unknown>): string {
+  const cats = asStringArray(article.category).map((c) => c.toLowerCase());
+  const kws = asStringArray(article.keywords).map((k) => k.toLowerCase());
+  const title = (asOptionalString(article.title) || "").toLowerCase();
+  const all = [...cats, ...kws, title].join(" ");
+
+  if (/earnings|revenue|profit|quarterly|eps|13f|institutional/i.test(all)) return "earnings";
+  if (/fed|gdp|inflation|cpi|rate|treasury|macro|economic/i.test(all)) return "macro";
+  if (/war|sanction|tariff|geopolit|invasion|military|nato/i.test(all)) return "geopolitical";
+  if (/regulation|policy|ban|law|legislation|government|bill/i.test(all)) return "policy";
+  return "sector";
+}
+
+function inferSentiment(article: Record<string, unknown>): string {
+  const text = `${asOptionalString(article.title) || ""} ${asOptionalString(article.description) || ""}`.toLowerCase();
+  const bearish = ["crash","fall","drop","decline","loss","miss","slash","cut","warn","plunge","tumble","fear","risk","downturn","recession","layoff","bankrupt"];
+  const bullish = ["surge","rally","gain","jump","beat","soar","boost","record","breakthrough","upgrade","bull","growth","profit","optimistic","rise"];
+
+  let score = 0;
+  for (const w of bearish) { if (text.includes(w)) score--; }
+  for (const w of bullish) { if (text.includes(w)) score++; }
+
+  if (score <= -1) return "bearish";
+  if (score >= 1) return "bullish";
+  return "neutral";
+}
+
+function inferRegions(article: Record<string, unknown>): string[] {
+  const countries = asStringArray(article.country).map((c) => c.toLowerCase());
+  const regions: string[] = [];
+  if (countries.some((c) => c.includes("united states"))) regions.push("us");
+  if (countries.some((c) => c.includes("china"))) regions.push("china", "asia");
+  if (countries.some((c) => c.includes("india"))) regions.push("india", "asia");
+  if (countries.some((c) => c.includes("japan") || c.includes("korea") || c.includes("taiwan"))) regions.push("asia");
+  if (countries.some((c) => c.includes("germany") || c.includes("france") || c.includes("united kingdom"))) regions.push("europe");
+  if (countries.some((c) => c.includes("saudi") || c.includes("iran") || c.includes("iraq"))) regions.push("middle_east");
+  if (countries.some((c) => c.includes("russia"))) regions.push("russia");
+  if (regions.length === 0) regions.push("global");
+  return [...new Set(regions)];
+}
+
+function formatTimestamp(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function mapArticleToNewsEvent(
+  article: Record<string, unknown>,
+  batchId: string,
+  index: number,
+  fetchedAt: Date
+) {
   const pubDate = asOptionalString(article.pubDate);
-  const sourceName = asOptionalString(article.source_name);
+  const timestamp = pubDate
+    ? formatTimestamp(new Date(pubDate))
+    : formatTimestamp(fetchedAt);
 
-  if (articleId && sourceId) {
-    return { article_id: articleId, source_id: sourceId };
-  }
-
-  if (link) {
-    return { link };
-  }
-
-  return { title, pubDate, source_name: sourceName };
+  return {
+    event_id: `${batchId}_${index}`,
+    batch_id: batchId,
+    timestamp,
+    headline: asOptionalString(article.title) || "Untitled",
+    body: asOptionalString(article.description) || asOptionalString(article.title) || "",
+    category: inferCategory(article),
+    source: asOptionalString(article.source_name) || asOptionalString(article.source_id) || "Unknown",
+    raw_sentiment_hint: inferSentiment(article),
+    regions: inferRegions(article),
+    keywords: asStringArray(article.keywords),
+    _live: true,
+    _article_id: asOptionalString(article.article_id),
+    _link: asOptionalString(article.link),
+    _source_url: asOptionalString(article.source_url),
+    fetched_at: fetchedAt,
+  };
 }
 
 export async function runFullDataSync(): Promise<SyncSummary> {
@@ -157,16 +219,20 @@ export async function runFullDataSync(): Promise<SyncSummary> {
             $or: checks.map((candidate) => getArticleMongoFilter(candidate)),
           },
           {
-            article_id: 1,
-            source_id: 1,
-            link: 1,
-            title: 1,
-            pubDate: 1,
+            _article_id: 1,
+            _link: 1,
+            headline: 1,
           }
         ).lean();
 
         for (const doc of existingDocs) {
-          const existingKey = getArticleUniqKey(doc as unknown as Record<string, unknown>);
+          // Map persisted field names back to raw article keys for dedup
+          const mapped: Record<string, unknown> = {
+            article_id: (doc as any)._article_id,
+            link: (doc as any)._link,
+            title: (doc as any).headline,
+          };
+          const existingKey = getArticleUniqKey(mapped);
           if (existingKey) {
             knownExistingKeys.add(existingKey);
           }
@@ -207,22 +273,11 @@ export async function runFullDataSync(): Promise<SyncSummary> {
     );
   }
 
-  const newsDocs = articles.map((article) => ({
-    article_id: asOptionalString(article.article_id),
-    title: asOptionalString(article.title),
-    description: asOptionalString(article.description),
-    link: asOptionalString(article.link),
-    pubDate: asOptionalString(article.pubDate),
-    source_id: asOptionalString(article.source_id),
-    source_name: asOptionalString(article.source_name),
-    language: asOptionalString(article.language),
-    country: asStringArray(article.country),
-    category: asStringArray(article.category),
-    keywords: asStringArray(article.keywords),
-    ai_tag: asOptionalString(article.ai_tag),
-    raw: article,
-    fetched_at: new Date(),
-  }));
+  const batchId = `live_${Date.now()}`;
+  const fetchedAt = new Date();
+  const newsDocs = articles.map((article, index) =>
+    mapArticleToNewsEvent(article, batchId, index, fetchedAt)
+  );
 
   if (newsDocs.length > 0) {
     await NewsEventModel.insertMany(newsDocs, { ordered: false });
@@ -325,6 +380,7 @@ export async function runFullDataSync(): Promise<SyncSummary> {
     purchasePriceBackfilled,
     latestPricesFetched: Object.keys(latestPriceMap).length,
     newsEventsStored: newsDocs.length,
+    newsEventsSaved: newsDocs,
     macroSaved: true,
     timestamp: new Date().toISOString(),
   };

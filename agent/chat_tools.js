@@ -2,8 +2,8 @@
 // Tools the chat agent can call on-demand. Each tool fetches only the
 // data the LLM needs — no upfront context stuffing.
 
-import { getLatestInsights, getActiveAlerts, getDB } from "./db.js";
-import { CLIENTS, TICKERS, RISK_THRESHOLDS } from "./data/sample_data.js";
+import { getLatestInsights, getActiveAlerts, getDB, getClients } from "./db.js";
+import { TICKERS, RISK_THRESHOLDS } from "./data/sample_data.js";
 import {
   computeVaR,
   runStressTest,
@@ -173,16 +173,17 @@ export const CHAT_TOOL_DEFINITIONS = [
 const chatToolImplementations = {
 
   async get_client_portfolio(args) {
-    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === args.client_id);
     if (!client) return { error: `Client ${args.client_id} not found` };
 
-    const holdings = Object.entries(client.holdings).map(([ticker, weight]) => ({
-      ticker,
-      name: TICKERS[ticker]?.name || ticker,
-      sector: TICKERS[ticker]?.sector || "unknown",
-      weight_pct: parseFloat((weight * 100).toFixed(1)),
-      value: Math.round(weight * client.portfolio_value),
-      beta: TICKERS[ticker]?.beta || 0
+    const holdings = client.holdings.map(h => ({
+      ticker: h.symbol,
+      name: h.name,
+      sector: h.sector,
+      weight_pct: parseFloat((h.weight * 100).toFixed(1)),
+      value: Math.round(h.weight * client.portfolio_value),
+      beta: TICKERS[h.symbol]?.beta || 0
     }));
 
     const sectors = {};
@@ -240,11 +241,11 @@ const chatToolImplementations = {
   },
 
   async get_all_clients_summary() {
-    return CLIENTS.map(client => {
+    const clients = getClients();
+    return clients.map(client => {
       const sectors = {};
-      for (const [ticker, weight] of Object.entries(client.holdings)) {
-        const sec = TICKERS[ticker]?.sector || "other";
-        sectors[sec] = (sectors[sec] || 0) + parseFloat((weight * 100).toFixed(1));
+      for (const h of client.holdings) {
+        sectors[h.sector] = (sectors[h.sector] || 0) + parseFloat((h.weight * 100).toFixed(1));
       }
       const topSectors = Object.entries(sectors)
         .sort((a, b) => b[1] - a[1])
@@ -274,7 +275,8 @@ const chatToolImplementations = {
   },
 
   async run_stress_test(args) {
-    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === args.client_id);
     if (!client) return { error: `Client ${args.client_id} not found` };
 
     if (args.scenario === "all") {
@@ -284,7 +286,8 @@ const chatToolImplementations = {
   },
 
   async run_monte_carlo_simulation(args) {
-    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === args.client_id);
     if (!client) return { error: `Client ${args.client_id} not found` };
 
     return runMonteCarloSimulation(client, {
@@ -294,7 +297,8 @@ const chatToolImplementations = {
   },
 
   async compare_portfolio_change(args) {
-    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === args.client_id);
     if (!client) return { error: `Client ${args.client_id} not found` };
     if (!args.proposed_holdings || typeof args.proposed_holdings !== "object") {
       return { error: "proposed_holdings is required" };
@@ -308,7 +312,8 @@ const chatToolImplementations = {
   },
 
   async generate_allocation_recommendation(args) {
-    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === args.client_id);
     if (!client) return { error: `Client ${args.client_id} not found` };
 
     return generateAllocationRecommendation(client, args.objective || "auto");
@@ -334,8 +339,9 @@ export async function executeChatTool(toolName, args) {
  * Get a short human-readable summary of a tool call for the UI
  */
 export function toolCallSummary(toolName, args) {
+  const clients = getClients();
   const clientName = args.client_id
-    ? CLIENTS.find(c => c.client_id === args.client_id)?.name || args.client_id
+    ? clients.find(c => c.client_id === args.client_id)?.name || args.client_id
     : null;
 
   switch (toolName) {

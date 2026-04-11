@@ -1,9 +1,9 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { CLIENTS, TICKERS } from "./data/sample_data.js";
+import { TICKERS } from "./data/sample_data.js";
 import { computeVaR } from "./analytics_engine.js";
-import { getLatestInsights, getActiveAlerts, getClientSnapshots, getDB } from "./db.js";
+import { getLatestInsights, getActiveAlerts, getClientSnapshots, getDB, getClients } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MEMORY_DIR = path.join(__dirname, "memory");
@@ -26,9 +26,8 @@ function formatPercent(value, digits = 1) {
 
 function toSectorBreakdown(client) {
   const sectors = {};
-  for (const [ticker, weight] of Object.entries(client.holdings)) {
-    const sector = TICKERS[ticker]?.sector || "other";
-    sectors[sector] = (sectors[sector] || 0) + weight;
+  for (const h of client.holdings) {
+    sectors[h.sector] = (sectors[h.sector] || 0) + h.weight;
   }
   return Object.fromEntries(
     Object.entries(sectors)
@@ -85,11 +84,10 @@ function renderMemoryMarkdown({ client, riskMetrics, alerts, insights, snapshots
   const latestStress = latestSnapshot?.stress_tests?.worst_case || null;
   const latestMonteCarlo = latestSnapshot?.monte_carlo || null;
 
-  const holdingsLines = Object.entries(client.holdings)
-    .sort((a, b) => b[1] - a[1])
-    .map(([ticker, weight]) => {
-      const meta = TICKERS[ticker] || { name: ticker, sector: "unknown" };
-      return `- ${ticker} (${meta.name}) — ${formatPercent(weight * 100)} | ${meta.sector} | ${formatCurrency(weight * client.portfolio_value)}`;
+  const holdingsLines = [...client.holdings]
+    .sort((a, b) => b.weight - a.weight)
+    .map(h => {
+      return `- ${h.symbol} (${h.name}) — ${formatPercent(h.weight * 100)} | ${h.sector} | ${formatCurrency(h.weight * client.portfolio_value)}`;
     })
     .join("\n");
 
@@ -113,7 +111,8 @@ function renderMemoryMarkdown({ client, riskMetrics, alerts, insights, snapshots
 }
 
 export async function createClientMemory(clientId) {
-  const client = CLIENTS.find(item => item.client_id === clientId);
+  const clients = getClients();
+  const client = clients.find(item => item.client_id === clientId);
   if (!client) {
     throw new Error(`Client ${clientId} not found`);
   }

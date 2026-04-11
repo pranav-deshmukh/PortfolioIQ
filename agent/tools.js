@@ -2,8 +2,8 @@
 // These are the tools the AI agent can call via function calling.
 // Each tool has a definition (for the LLM) and an implementation.
 
-import { saveInsight, saveAlert } from "./db.js";
-import { CLIENTS, TICKERS } from "./data/sample_data.js";
+import { saveInsight, saveAlert, getClients } from "./db.js";
+import { TICKERS } from "./data/sample_data.js";
 import { computeVaR } from "./analytics_engine.js";
 
 // ══════════════════════════════════════════════════════════════════════
@@ -104,16 +104,17 @@ const toolImplementations = {
   },
 
   async get_client_portfolio(args) {
-    const client = CLIENTS.find(c => c.client_id === args.client_id);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === args.client_id);
     if (!client) return { error: `Client ${args.client_id} not found` };
 
-    const holdingDetails = Object.entries(client.holdings).map(([ticker, weight]) => ({
-      ticker,
-      name: TICKERS[ticker]?.name || ticker,
-      sector: TICKERS[ticker]?.sector || "unknown",
-      weight_pct: parseFloat((weight * 100).toFixed(1)),
-      value: Math.round(weight * client.portfolio_value),
-      beta: TICKERS[ticker]?.beta || 0
+    const holdingDetails = client.holdings.map(h => ({
+      ticker: h.symbol,
+      name: h.name,
+      sector: h.sector,
+      weight_pct: parseFloat((h.weight * 100).toFixed(1)),
+      value: Math.round(h.weight * client.portfolio_value),
+      beta: TICKERS[h.symbol]?.beta || 0
     }));
 
     // Sector breakdown

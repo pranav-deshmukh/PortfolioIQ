@@ -1,7 +1,9 @@
 // ── News Ingestion Module ─────────────────────────────────────────────
 // Two modes controlled by USE_LIVE_NEWS env variable:
 //   OFF (default) → uses static NEWS_POOL sample data
-//   ON            → fetches real news from the Server API (localhost:3002)
+//   ON            → tries /api/sync/all first (fetches + saves to MongoDB),
+//                   falls back to /api/news direct fetch,
+//                   then falls back to sample data
 
 import { v4Ish } from "./utils.js";
 
@@ -86,6 +88,86 @@ function mapArticleToAgentEvent(article, batchId, index) {
 }
 
 /**
+ * Convert a saved NewsEvent document (from /api/sync/all) to the agent's format.
+ * These are already transformed by the Server — just pass through.
+ */
+function mapSavedEventToAgentEvent(doc) {
+  return {
+    event_id:           doc.event_id,
+    batch_id:           doc.batch_id,
+    timestamp:          doc.timestamp,
+    headline:           doc.headline,
+    body:               doc.body || doc.headline || "",
+    category:           doc.category || "sector",
+    source:             doc.source || "Unknown",
+    raw_sentiment_hint: doc.raw_sentiment_hint || "neutral",
+    regions:            doc.regions || ["global"],
+    keywords:           doc.keywords || [],
+    _live:              doc._live ?? true,
+    _article_id:        doc._article_id,
+    _link:              doc._link,
+    _source_url:        doc._source_url,
+  };
+}
+
+// ── Primary: Sync All (fetch + save to MongoDB + return) ──────────────
+
+/**
+ * Hit POST /api/sync/all which fetches news from NewsData.io, saves to MongoDB,
+ * and returns the saved documents. This is the preferred path — news gets
+ * persisted AND used by the pipeline in one call.
+ */
+async function fetchViaSyncAll(count = 3) {
+  const url = `${SERVER_BASE_URL}/api/sync/all`;
+  console.log(`[News] 🔄 Trying POST /api/sync/all → ${url}`);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(60000),  // sync can be slow (fetches prices + macro too)
+  });
+
+  if (!res.ok) {
+    throw new Error(`/api/sync/all responded ${res.status}: ${await res.text()}`);
+  }
+
+  const json = await res.json();
+  // Response shape: { success, data: { newsEventsStored, newsEventsSaved: [...], ... } }
+  let savedDocs = json?.data?.newsEventsSaved || [];
+
+  // If sync returned saved docs directly, use them
+  if (savedDocs.length > 0) {
+    const events = savedDocs.slice(0, count).map(mapSavedEventToAgentEvent);
+    console.log(`[News] ✅ Got ${events.length} events via /api/sync/all (saved to MongoDB):`);
+    events.forEach(e => console.log(`  → [${e.category}] ${e.headline.substring(0, 80)}`));
+    return events;
+  }
+
+  // Fallback: sync succeeded but didn't return docs — fetch recent from DB
+  const storedCount = json?.data?.newsEventsStored || 0;
+  if (storedCount > 0) {
+    console.log(`[News] Sync saved ${storedCount} articles — fetching recent from /api/news/recent...`);
+    const recentRes = await fetch(`${SERVER_BASE_URL}/api/news/recent?limit=${count}`, {
+      signal: AbortSignal.timeout(10000)
+    });
+    if (recentRes.ok) {
+      const recentJson = await recentRes.json();
+      const recentDocs = recentJson?.data?.events || [];
+      if (recentDocs.length > 0) {
+        const events = recentDocs.slice(0, count).map(mapSavedEventToAgentEvent);
+        console.log(`[News] ✅ Got ${events.length} recent events from DB:`);
+        events.forEach(e => console.log(`  → [${e.category}] ${e.headline.substring(0, 80)}`));
+        return events;
+      }
+    }
+  }
+
+  throw new Error("/api/sync/all completed but returned no usable news events");
+}
+
+// ── Fallback: Direct News Fetch (no MongoDB save) ─────────────────────
+
+/**
  * Fetch `count` real news articles from the Server API and map them
  * to the agent's expected news event format.
  * Falls back to sample data if the Server is unreachable.
@@ -94,7 +176,7 @@ export async function fetchLiveNewsBatch(count = 3) {
   const batchId = `live_${Date.now()}`;
   const url = `${SERVER_BASE_URL}/api/news?q=stock+market&language=en&size=${count}`;
 
-  console.log(`[News] Fetching ${count} live articles from Server → ${url}`);
+  console.log(`[News] 📡 Fetching ${count} live articles from /api/news → ${url}`);
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
@@ -112,8 +194,8 @@ export async function fetchLiveNewsBatch(count = 3) {
     }
 
     const events = articles.slice(0, count).map((a, i) => mapArticleToAgentEvent(a, batchId, i));
-    console.log(`[News] ✅ Got ${events.length} live events:`);
-    events.forEach(e => console.log(`  → ${e.headline.substring(0, 80)}`));
+    console.log(`[News] ✅ Got ${events.length} live events (NOT saved to DB):`);
+    events.forEach(e => console.log(`  → [${e.category}] ${e.headline.substring(0, 80)}`));
     return events;
 
   } catch (err) {
@@ -280,15 +362,42 @@ export function isLiveNewsEnabled() {
 }
 
 /**
- * Smart fetch — reads the USE_LIVE_NEWS env variable and picks the right source.
- * ON  → fetchLiveNewsBatch (Server API)
- * OFF → fetchNewsBatch     (sample data)
+ * Smart fetch — the main entry point for the pipeline.
+ * 
+ * When LIVE mode is ON:
+ *   1. Try POST /api/sync/all → fetches + saves to MongoDB + returns events ✅
+ *   2. If that fails, try GET /api/news → direct fetch (no DB save) ⚠️
+ *   3. If that fails too, use sample data pool 🟡
+ * 
+ * When LIVE mode is OFF:
+ *   → Use sample data pool directly
  */
 export async function fetchNews(count = 3) {
-  if (isLiveNewsEnabled()) {
-    console.log("[News] 🔴 LIVE mode enabled (USE_LIVE_NEWS=ON) — fetching from Server API");
-    return fetchLiveNewsBatch(count);
+  if (!isLiveNewsEnabled()) {
+    console.log("[News] 🟡 SAMPLE mode (USE_LIVE_NEWS=OFF) — using static news pool");
+    return fetchNewsBatch(count);
   }
-  console.log("[News] 🟡 SAMPLE mode (USE_LIVE_NEWS=OFF) — using static news pool");
+
+  console.log("[News] 🔴 LIVE mode enabled (USE_LIVE_NEWS=ON)");
+
+  // Step 1: Try /api/sync/all (preferred — fetches + saves to MongoDB)
+  try {
+    const events = await fetchViaSyncAll(count);
+    return events;
+  } catch (err) {
+    console.warn(`[News] ⚠️ /api/sync/all failed: ${err.message}`);
+  }
+
+  // Step 2: Fallback to /api/news (direct fetch, no DB save)
+  try {
+    console.log("[News] ⬇️ Falling back to /api/news (direct fetch, no DB save)...");
+    const events = await fetchLiveNewsBatch(count);
+    return events;
+  } catch (err) {
+    console.warn(`[News] ⚠️ /api/news also failed: ${err.message}`);
+  }
+
+  // Step 3: Last resort — sample data
+  console.warn("[News] 🟡 All live sources failed — using sample data pool");
   return fetchNewsBatch(count);
 }

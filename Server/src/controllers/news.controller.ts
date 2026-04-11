@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { fetchNewsData, NewsDataFilters } from "../services/newsData-api.service";
+import NewsEventModel from "../models/newsEvent.model";
+import { connectDB } from "../services/portfolioDb.service";
 
 function cleanArticle(article: any) {
   return {
@@ -107,6 +109,24 @@ export async function postNews(req: Request, res: Response) {
     res.status(500).json({
       success: false,
       error: error.message || "Failed to fetch news",
+    });
+  }
+}
+
+export async function getRecentNews(req: Request, res: Response) {
+  try {
+    await connectDB();
+    const limit = parseInt(req.query.limit as string) || 10;
+    const events = await NewsEventModel.find()
+      .sort({ fetched_at: -1, createdAt: -1 })
+      .limit(limit)
+      .lean();
+    res.json({ success: true, data: { events } });
+  } catch (error: any) {
+    console.error("Recent news error:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to fetch recent news",
     });
   }
 }

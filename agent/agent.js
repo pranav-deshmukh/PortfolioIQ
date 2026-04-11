@@ -9,7 +9,7 @@ dotenv.config();
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import { TOOL_DEFINITIONS, executeTool } from "./tools.js";
-import { CLIENTS } from "./data/sample_data.js";
+import { getClients } from "./db.js";
 import { callLLMWithRetry, getProviderName } from "./llm.js";
 
 // ══════════════════════════════════════════════════════════════════════
@@ -152,6 +152,7 @@ export async function runAgent(analyticsResults) {
 
 function buildUserMessage(analytics) {
   const { event_metrics, aggregated_sector_impacts, avg_confidence, client_impacts, summary } = analytics;
+  const clients = getClients();
 
   let msg = `## New Market Events Batch\n\n`;
   msg += `**${summary.total_events} events** just arrived. Average confidence: ${avg_confidence}%\n\n`;
@@ -174,9 +175,9 @@ function buildUserMessage(analytics) {
   // Client impacts
   msg += `\n### Client Portfolio Impacts:\n`;
   for (const ci of client_impacts) {
-    const client = CLIENTS.find(c => c.client_id === ci.client_id);
+    const client = clients.find(c => c.client_id === ci.client_id);
     msg += `\n**${ci.client_name}** (${ci.client_id})\n`;
-    msg += `- Age: ${client.age} | Risk tolerance: ${ci.risk_tolerance} | Portfolio: $${ci.portfolio_value.toLocaleString()} | Horizon: ${client.time_horizon_years}y\n`;
+    msg += `- Risk tolerance: ${ci.risk_tolerance} | Portfolio: $${ci.portfolio_value.toLocaleString()} | Horizon: ${client?.time_horizon_years || "?"}y\n`;
     msg += `- Total impact: ${ci.total_impact_pct > 0 ? "+" : ""}${ci.total_impact_pct}% ($${ci.total_impact_dollar.toLocaleString()})\n`;
     msg += `- Confidence-weighted impact: ${ci.effective_impact_pct > 0 ? "+" : ""}${ci.effective_impact_pct}%\n`;
     msg += `- Threshold (${ci.risk_tolerance}): ±${ci.threshold_pct}% → ${ci.exceeds_threshold ? "⚠️ BREACHED" : "✅ Within limits"}\n`;
@@ -201,10 +202,10 @@ function buildUserMessage(analytics) {
   }
 
   msg += `\n---\n`;
-  msg += `\nPlease analyze all events, connect the dots (explain causal chains), and for EACH of the ${CLIENTS.length} clients:\n`;
+  msg += `\nPlease analyze all events, connect the dots (explain causal chains), and for EACH of the ${clients.length} clients:\n`;
   msg += `1. Call save_client_insight with a comprehensive analysis\n`;
   msg += `2. Call create_alert if the client's portfolio is significantly affected\n`;
-  msg += `\nBe thorough — cover all ${CLIENTS.length} clients.`;
+  msg += `\nBe thorough — cover all ${clients.length} clients.`;
 
   return msg;
 }

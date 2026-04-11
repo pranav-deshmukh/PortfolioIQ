@@ -7,13 +7,14 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import { connectDB, closeConnection } from "./db.js";
+import { connectDB, closeConnection, loadClients } from "./db.js";
 import { runPipeline } from "./pipeline.js";
 
 const newsCount = parseInt(process.argv[2]) || 3;
 
 async function main() {
   await connectDB();
+  await loadClients();
   const result = await runPipeline(newsCount);
   console.log("\n── Result ──");
   console.log(`Status: ${result.status}`);

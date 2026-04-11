@@ -6,9 +6,9 @@ dotenv.config();
 
 import express from "express";
 import cors from "cors";
-import { connectDB, getLatestInsights, getActiveAlerts, getAllAlerts, getPipelineRuns, dismissAlert, getClientSnapshots, getLatestSnapshots } from "./db.js";
+import { connectDB, getLatestInsights, getActiveAlerts, getAllAlerts, getPipelineRuns, dismissAlert, getClientSnapshots, getLatestSnapshots, loadClients, getClients } from "./db.js";
 import { runPipeline } from "./pipeline.js";
-import { CLIENTS, TICKERS } from "./data/sample_data.js";
+import { TICKERS } from "./data/sample_data.js";
 import { computeVaR } from "./analytics_engine.js";
 import { CHAT_TOOL_DEFINITIONS, executeChatTool, toolCallSummary } from "./chat_tools.js";
 import { createClientMemory, loadClientMemory } from "./memory_manager.js";
@@ -105,7 +105,8 @@ app.get("/api/analytics-latest", async (req, res) => {
 
 // Get clients list
 app.get("/api/clients", (req, res) => {
-  res.json(CLIENTS.map(c => ({
+  const clients = getClients();
+  res.json(clients.map(c => ({
     client_id: c.client_id,
     name: c.name,
     portfolio_value: c.portfolio_value,
@@ -116,16 +117,17 @@ app.get("/api/clients", (req, res) => {
 // Get full client portfolio details (holdings, sectors, risk metrics)
 app.get("/api/clients/:clientId", async (req, res) => {
   try {
-    const client = CLIENTS.find(c => c.client_id === req.params.clientId);
+    const clients = getClients();
+    const client = clients.find(c => c.client_id === req.params.clientId);
     if (!client) return res.status(404).json({ error: "Client not found" });
 
-    const holdings = Object.entries(client.holdings).map(([ticker, weight]) => ({
-      ticker,
-      name: TICKERS[ticker]?.name || ticker,
-      sector: TICKERS[ticker]?.sector || "unknown",
-      weight_pct: parseFloat((weight * 100).toFixed(1)),
-      value: Math.round(weight * client.portfolio_value),
-      beta: TICKERS[ticker]?.beta || 0
+    const holdings = client.holdings.map(h => ({
+      ticker: h.symbol,
+      name: h.name,
+      sector: h.sector,
+      weight_pct: parseFloat((h.weight * 100).toFixed(1)),
+      value: Math.round(h.weight * client.portfolio_value),
+      beta: TICKERS[h.symbol]?.beta || 0
     }));
 
     const sectorBreakdown = {};
@@ -228,9 +230,6 @@ const CHAT_SYSTEM_PROMPT = `You are an AI copilot for LPL Financial advisors. Yo
 
 You have access to tools that let you fetch portfolio data, alerts, news context, stress tests, Monte Carlo simulations, recommendation payloads, and before/after portfolio comparisons. ALWAYS use these tools to get data before answering — never make up numbers.
 
-## Available clients:
-${CLIENTS.map(c => `- ${c.client_id}: ${c.name} (${c.risk_tolerance}, $${c.portfolio_value.toLocaleString()})`).join("\n")}
-
 ## How to answer:
 1. First, call the relevant tools to get the data you need
 2. If the advisor asks for a recommendation, generate a proposed allocation and discuss simulated before/after trade-offs
@@ -290,7 +289,7 @@ app.post("/api/chat", async (req, res) => {
 
   try {
     const clientLabel = client_id
-      ? CLIENTS.find(c => c.client_id === client_id)?.name || client_id
+      ? getClients().find(c => c.client_id === client_id)?.name || client_id
       : "All Clients";
 
     const clientMemory = client_id ? await loadClientMemory(client_id) : null;
@@ -304,7 +303,9 @@ app.post("/api/chat", async (req, res) => {
     console.log(`[Chat] Memory: ${memoryLoaded ? `LOADED (${clientMemory.updated_at})` : "NOT FOUND"} | Tools: ${availableTools.length}/${CHAT_TOOL_DEFINITIONS.length} | Fresh-data override: ${needsFreshData}`);
 
     // Build a lean system prompt — NO data stuffing
+    const clients = getClients();
     let systemContent = CHAT_SYSTEM_PROMPT;
+    systemContent += `\n\n## Available clients:\n${clients.map(c => `- ${c.client_id}: ${c.name} (${c.risk_tolerance}, $${c.portfolio_value.toLocaleString()})`).join("\n")}`;
     if (client_id) {
       systemContent += `\n\nThe advisor is currently viewing client ${client_id}. Focus on this client unless they ask about others.`;
       if (clientMemory?.exists && clientMemory.content) {
@@ -450,6 +451,7 @@ app.get("/", (req, res) => {
 
 async function start() {
   await connectDB();
+  await loadClients();
 
   app.listen(PORT, () => {
     console.log(`\n[Server] Running at http://localhost:${PORT}`);

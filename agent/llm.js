@@ -73,10 +73,20 @@ function messagesToGemini(messages) {
       // Gemini expects functionResponse inside a "user" turn (or inline)
       let parsed;
       try { parsed = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content; } catch { parsed = { result: msg.content }; }
-      contents.push({
-        role: "user",
-        parts: [{ functionResponse: { name: msg._toolName || "tool", response: parsed } }]
-      });
+      // Gemini's functionResponse.response MUST be a JSON object (Struct),
+      // never an array, string, null, or primitive.
+      if (parsed === null || parsed === undefined || typeof parsed !== "object" || Array.isArray(parsed)) {
+        parsed = { result: parsed };
+      }
+      const frPart = { functionResponse: { name: msg._toolName || "tool", response: parsed } };
+      // Merge consecutive tool results into a single "user" turn so Gemini
+      // doesn't see back-to-back user roles (which it rejects).
+      const prev = contents[contents.length - 1];
+      if (prev && prev.role === "user" && prev.parts.length > 0 && prev.parts[0].functionResponse) {
+        prev.parts.push(frPart);
+      } else {
+        contents.push({ role: "user", parts: [frPart] });
+      }
       continue;
     }
 

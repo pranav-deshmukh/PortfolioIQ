@@ -3,7 +3,8 @@
 // Produces structured metrics: sector impacts, confidence, severity, VaR, stress tests.
 // These metrics get fed to the AI agent.
 
-import { CLIENTS, TICKERS, SECTORS, RISK_THRESHOLDS } from "./data/sample_data.js";
+import { TICKERS, SECTORS, RISK_THRESHOLDS, holdingsMapToArray } from "./data/sample_data.js";
+import { getClients } from "./db.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // 1. EVENT CLASSIFICATION — ML Model (HuggingFace Spaces)
@@ -23,39 +24,41 @@ export const STRESS_SCENARIOS = {
   "2008_crisis": {
     name: "2008 Financial Crisis",
     desc: "Lehman collapse, S&P -57%",
-    shocks: { tech: -0.52, financials: -0.68, energy: -0.45, healthcare: -0.22, bonds: 0.08, commodities: 0.05, international: -0.55, cash: 0.0 }
+    shocks: { tech: -0.52, financials: -0.68, energy: -0.45, healthcare: -0.22, bonds: 0.08, commodities: 0.05, international: -0.55, cash: 0.0, consumer: -0.30, real_estate: -0.50 }
   },
   "covid_crash": {
     name: "2020 COVID Crash",
     desc: "Fastest bear market, -34%",
-    shocks: { tech: -0.22, financials: -0.40, energy: -0.52, healthcare: -0.18, bonds: 0.06, commodities: -0.35, international: -0.32, cash: 0.0 }
+    shocks: { tech: -0.22, financials: -0.40, energy: -0.52, healthcare: -0.18, bonds: 0.06, commodities: -0.35, international: -0.32, cash: 0.0, consumer: -0.15, real_estate: -0.25 }
   },
   "2022_rate_shock": {
     name: "2022 Rate Shock",
     desc: "Fed hikes 425bp, worst bond year",
-    shocks: { tech: -0.38, financials: -0.15, energy: 0.58, healthcare: -0.05, bonds: -0.16, commodities: 0.22, international: -0.20, cash: 0.02 }
+    shocks: { tech: -0.38, financials: -0.15, energy: 0.58, healthcare: -0.05, bonds: -0.16, commodities: 0.22, international: -0.20, cash: 0.02, consumer: -0.12, real_estate: -0.30 }
   },
   "oil_spike": {
     name: "Oil Spike +30%",
     desc: "OPEC+ surprise cut + supply shock",
-    shocks: { tech: -0.06, financials: -0.04, energy: 0.22, healthcare: 0.0, bonds: -0.03, commodities: 0.18, international: -0.04, cash: 0.0 }
+    shocks: { tech: -0.06, financials: -0.04, energy: 0.22, healthcare: 0.0, bonds: -0.03, commodities: 0.18, international: -0.04, cash: 0.0, consumer: -0.05, real_estate: -0.02 }
   },
   "tech_selloff": {
     name: "Tech Selloff -25%",
     desc: "AI bubble deflation / antitrust",
-    shocks: { tech: -0.25, financials: -0.05, energy: 0.02, healthcare: 0.03, bonds: 0.04, commodities: 0.0, international: -0.08, cash: 0.0 }
+    shocks: { tech: -0.25, financials: -0.05, energy: 0.02, healthcare: 0.03, bonds: 0.04, commodities: 0.0, international: -0.08, cash: 0.0, consumer: -0.05, real_estate: -0.03 }
   }
 };
 
 const DEFAULT_SECTOR_TICKERS = {
   tech: ["MSFT", "AAPL", "NVDA", "AMZN"],
-  financials: ["JPM", "BAC"],
+  financials: ["JPM", "BAC", "V"],
   energy: ["XOM", "CVX"],
-  healthcare: ["JNJ", "PFE"],
+  healthcare: ["JNJ", "PFE", "UNH"],
   bonds: ["AGG", "BND"],
   commodities: ["GLD"],
   international: ["VEA"],
-  cash: ["CASH"]
+  cash: ["CASH"],
+  consumer: ["PG", "KO", "TSLA"],
+  real_estate: ["AMT"]
 };
 
 const RECOMMENDATION_PROFILES = {
@@ -353,20 +356,17 @@ export function computePortfolioImpact(client, sectorImpacts, confidence) {
   let totalImpact = 0;
   const holdingImpacts = [];
 
-  for (const [ticker, weight] of Object.entries(client.holdings)) {
-    const tickerInfo = TICKERS[ticker];
-    if (!tickerInfo) continue;
-
-    const sectorImpact = sectorImpacts[tickerInfo.sector] || 0;
-    const holdingImpact = weight * sectorImpact;
+  for (const h of client.holdings) {
+    const sectorImpact = sectorImpacts[h.sector] || 0;
+    const holdingImpact = h.weight * sectorImpact;
     totalImpact += holdingImpact;
 
     if (Math.abs(sectorImpact) > 0.01) {
       holdingImpacts.push({
-        ticker,
-        name: tickerInfo.name,
-        sector: tickerInfo.sector,
-        weight: parseFloat((weight * 100).toFixed(1)),
+        ticker: h.symbol,
+        name: h.name,
+        sector: h.sector,
+        weight: parseFloat((h.weight * 100).toFixed(1)),
         sector_impact_pct: parseFloat((sectorImpact * 100).toFixed(2)),
         holding_impact_pct: parseFloat((holdingImpact * 100).toFixed(2)),
         holding_impact_dollar: Math.round(holdingImpact * client.portfolio_value)
@@ -425,9 +425,9 @@ function generatePortfolioReturns(client, days = 500) {
 
   return Array.from({ length: days }, (_, i) => {
     let r = 0;
-    for (const [t, w] of Object.entries(client.holdings)) {
-      const beta = TICKERS[t]?.beta || 0;
-      r += w * (beta * mkt[i] + (rand() - 0.5) * 2 * IDIO_DAILY_VOL);
+    for (const h of client.holdings) {
+      const beta = TICKERS[h.symbol]?.beta || 0;
+      r += h.weight * (beta * mkt[i] + (rand() - 0.5) * 2 * IDIO_DAILY_VOL);
     }
     return r;
   });
@@ -483,7 +483,7 @@ function percentileValue(sorted, p) {
 
 // ── Concentration Metrics ────────────────────────────────────────────
 function calculateConcentration(client) {
-  const weights = Object.values(client.holdings);
+  const weights = client.holdings.map(h => h.weight);
 
   // HHI = sum(w^2) — lower is more diversified
   const hhi = weights.reduce((s, w) => s + w * w, 0);
@@ -497,9 +497,8 @@ function calculateConcentration(client) {
 
   // Sector breakdown
   const sectorExposure = {};
-  for (const [ticker, weight] of Object.entries(client.holdings)) {
-    const sec = TICKERS[ticker]?.sector || "other";
-    sectorExposure[sec] = (sectorExposure[sec] || 0) + weight;
+  for (const h of client.holdings) {
+    sectorExposure[h.sector] = (sectorExposure[h.sector] || 0) + h.weight;
   }
 
   return { hhi, effectiveAssets, top3Concentration: top3, sectorExposure };
@@ -536,9 +535,17 @@ function sumObjectValues(obj) {
 }
 
 function normalizeHoldings(holdings) {
-  const entries = Object.entries(holdings || {})
-    .map(([ticker, weight]) => [ticker, Number(weight)])
-    .filter(([_, weight]) => Number.isFinite(weight) && weight > 0);
+  // Handle both array format (new) and map format (proposed/hypothetical)
+  let entries;
+  if (Array.isArray(holdings)) {
+    entries = holdings
+      .map(h => [h.symbol, Number(h.weight)])
+      .filter(([_, weight]) => Number.isFinite(weight) && weight > 0);
+  } else {
+    entries = Object.entries(holdings || {})
+      .map(([ticker, weight]) => [ticker, Number(weight)])
+      .filter(([_, weight]) => Number.isFinite(weight) && weight > 0);
+  }
 
   const total = entries.reduce((sum, [_, weight]) => sum + weight, 0);
   if (total <= 0) {
@@ -551,10 +558,11 @@ function normalizeHoldings(holdings) {
 }
 
 function buildPortfolioVariant(client, holdings, label = "Proposed") {
+  const normalizedMap = normalizeHoldings(holdings);
   return {
     ...client,
     name: `${client.name} (${label})`,
-    holdings: normalizeHoldings(holdings)
+    holdings: holdingsMapToArray(normalizedMap)
   };
 }
 
@@ -577,6 +585,18 @@ function randomNormal(rand) {
 }
 
 function formatHoldingsForOutput(holdings, portfolioValue = null) {
+  // Handle both array format (new) and map format (legacy)
+  if (Array.isArray(holdings)) {
+    return holdings
+      .map(h => ({
+        ticker: h.symbol,
+        sector: h.sector,
+        name: h.name,
+        weight_pct: parseFloat((h.weight * 100).toFixed(2)),
+        value: portfolioValue ? Math.round(h.weight * portfolioValue) : undefined
+      }))
+      .sort((a, b) => b.weight_pct - a.weight_pct);
+  }
   return Object.entries(holdings)
     .map(([ticker, weight]) => ({
       ticker,
@@ -620,9 +640,9 @@ function buildSectorBasedHoldings(client, sectorTargets) {
   for (const [sector, sectorWeight] of Object.entries(normalizedTargets)) {
     if (sectorWeight <= 0) continue;
 
-    const currentTickers = Object.entries(client.holdings)
-      .filter(([ticker]) => (TICKERS[ticker]?.sector || "other") === sector)
-      .map(([ticker, weight]) => ({ ticker, weight }));
+    const currentTickers = client.holdings
+      .filter(h => h.sector === sector)
+      .map(h => ({ ticker: h.symbol, weight: h.weight }));
 
     const distribution = currentTickers.length > 0
       ? currentTickers
@@ -645,17 +665,16 @@ export function runStressTest(client, scenarioKey) {
 
   let impact = 0;
   const holdingImpacts = [];
-  for (const [ticker, weight] of Object.entries(client.holdings)) {
-    const sector = TICKERS[ticker]?.sector ?? "cash";
-    const shock = scenario.shocks[sector] ?? 0;
-    const holdingImpact = weight * shock;
+  for (const h of client.holdings) {
+    const shock = scenario.shocks[h.sector] ?? 0;
+    const holdingImpact = h.weight * shock;
     impact += holdingImpact;
 
     if (Math.abs(shock) > 0.01) {
       holdingImpacts.push({
-        ticker,
-        sector,
-        weight_pct: parseFloat((weight * 100).toFixed(1)),
+        ticker: h.symbol,
+        sector: h.sector,
+        weight_pct: parseFloat((h.weight * 100).toFixed(1)),
         shock_pct: parseFloat((shock * 100).toFixed(1)),
         impact_pct: parseFloat((holdingImpact * 100).toFixed(2)),
         impact_dollar: Math.round(holdingImpact * client.portfolio_value)
@@ -809,7 +828,8 @@ export async function generateAllocationRecommendation(client, objective = "auto
 
   const holdingChanges = Object.entries(proposedHoldings)
     .map(([ticker, newWeight]) => {
-      const currentWeight = client.holdings[ticker] || 0;
+      const currentHolding = client.holdings.find(h => h.symbol === ticker);
+      const currentWeight = currentHolding?.weight || 0;
       return {
         ticker,
         current_weight_pct: parseFloat((currentWeight * 100).toFixed(2)),
@@ -956,7 +976,8 @@ export async function computeVaR(client, severity = "LOW") {
 // Realistic single-batch sector caps (no sector moves >15% from 3-4 news items)
 const SECTOR_CAPS = {
   tech: 0.15, financials: 0.15, energy: 0.18, healthcare: 0.12,
-  bonds: 0.08, commodities: 0.12, international: 0.12, cash: 0.01
+  bonds: 0.08, commodities: 0.12, international: 0.12, cash: 0.01,
+  consumer: 0.12, real_estate: 0.12
 };
 
 // Macro regime definitions — when a regime is dominant, it overrides conflicting signals
@@ -1120,7 +1141,8 @@ export async function runAnalytics(newsEvents) {
   const medCount = eventMetrics.filter(e => e.severity === "MEDIUM").length;
   const dominantSeverity = highCount > 0 ? "HIGH" : medCount > 0 ? "MEDIUM" : "LOW";
 
-  const clientImpacts = await Promise.all(CLIENTS.map(async client => {
+  const clients = getClients();
+  const clientImpacts = await Promise.all(clients.map(async client => {
     const varMetrics = await computeVaR(client, dominantSeverity);
     const stressTests = runStressTestSuite(client);
     const monteCarlo = runMonteCarloSimulation(client, {
