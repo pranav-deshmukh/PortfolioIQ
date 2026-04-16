@@ -38,6 +38,38 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
   const typewriterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamDoneRef = useRef(false);
   const finalizedRef = useRef(false);  // guard: only finalize once per stream
+  const receivedTokensRef = useRef(false);
+  const suppressCurrentStreamRef = useRef(false);
+  const finalizedContentRef = useRef<string | null>(null);
+
+  const finalizeAssistantMessage = useCallback((explicitContent?: string) => {
+    if (finalizedRef.current) {
+      return;
+    }
+
+    finalizedRef.current = true;
+    setStreamingContent((prev) => {
+      const content = explicitContent ?? prev ?? "";
+
+      if (
+        content &&
+        !suppressCurrentStreamRef.current &&
+        finalizedContentRef.current !== content
+      ) {
+        finalizedContentRef.current = content;
+        setMessages((msgs) => {
+          const last = msgs[msgs.length - 1];
+          if (last?.role === "assistant" && last.content === content) {
+            return msgs;
+          }
+
+          return [...msgs, { role: "assistant", content }];
+        });
+      }
+
+      return null;
+    });
+  }, []);
 
   /** Drain up to N chars from the token queue each tick */
   const startTypewriter = useCallback(() => {
@@ -51,23 +83,14 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
           // Queue drained and stream finished — stop timer
           clearInterval(typewriterTimerRef.current!);
           typewriterTimerRef.current = null;
-          // Finalize: move streamed content into messages (once only)
-          if (!finalizedRef.current) {
-            finalizedRef.current = true;
-            setStreamingContent((prev) => {
-              if (prev) {
-                setMessages((msgs) => [...msgs, { role: "assistant", content: prev }]);
-              }
-              return null;
-            });
-          }
+          finalizeAssistantMessage();
         }
         return;
       }
       const chunk = queue.splice(0, CHARS_PER_TICK).join("");
       setStreamingContent((prev) => (prev ?? "") + chunk);
     }, TICK_MS);
-  }, []);
+  }, [finalizeAssistantMessage]);
 
   const stopTypewriter = useCallback(() => {
     if (typewriterTimerRef.current) {
@@ -172,6 +195,11 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
 
     abortRef.current = streamChatMessage(text, clientId, historyForLLM, {
       onToolCall(event) {
+        suppressCurrentStreamRef.current = true;
+        stopTypewriter();
+        setStreamingContent(null);
+        finalizedRef.current = true;
+
         setToolSteps((prev) => [
           ...prev,
           { name: event.name, summary: event.summary, status: "running" },
@@ -191,6 +219,9 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
       onStreamStart() {
         streamDoneRef.current = false;
         finalizedRef.current = false;
+        finalizedContentRef.current = null;
+        receivedTokensRef.current = false;
+        suppressCurrentStreamRef.current = false;
         tokenQueueRef.current = [];
         setStreamingContent("");
         startTypewriter();
@@ -198,26 +229,39 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
 
       onToken(content) {
         // Push chars to the typewriter queue — it drains them smoothly
+        receivedTokensRef.current = true;
         tokenQueueRef.current.push(...content.split(""));
       },
 
       onStreamEnd() {
         // If no tokens ever arrived (tool-call iteration), just clean up
         // without creating an empty message bubble.
-        if (tokenQueueRef.current.length === 0) {
+        if (!receivedTokensRef.current) {
           stopTypewriter();
           setStreamingContent(null);
           finalizedRef.current = true;   // nothing to finalize
           return;
         }
+
+        if (suppressCurrentStreamRef.current) {
+          stopTypewriter();
+          setStreamingContent(null);
+          finalizedRef.current = true;
+          return;
+        }
+
         // Signal the typewriter to finalize after draining remaining chars
         streamDoneRef.current = true;
       },
 
       onResponse(content) {
         // Fallback for non-streaming responses
-        setStreamingContent(null);
-        setMessages((prev) => [...prev, { role: "assistant", content }]);
+        if (receivedTokensRef.current || finalizedRef.current) {
+          return;
+        }
+
+        suppressCurrentStreamRef.current = false;
+        finalizeAssistantMessage(content);
       },
 
       onError(message) {
@@ -228,20 +272,14 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
         streamDoneRef.current = true;
         // Only finalize if typewriter hasn't already done it
         if (!finalizedRef.current && !typewriterTimerRef.current) {
-          finalizedRef.current = true;
-          setStreamingContent((prev) => {
-            if (prev) {
-              setMessages((msgs) => [...msgs, { role: "assistant", content: prev }]);
-            }
-            return null;
-          });
+          finalizeAssistantMessage();
         }
         setLoading(false);
         setToolSteps([]);
         inputRef.current?.focus();
       },
     });
-  }, [input, loading, messages, clientId, startTypewriter]);
+  }, [input, loading, messages, clientId, finalizeAssistantMessage, startTypewriter, stopTypewriter]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -273,7 +311,7 @@ export default function ChatPanel({ clientId, clientLabel }: ChatPanelProps) {
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div className="flex items-center gap-2">
           <Bot className="h-4 w-4 text-blue-600" />
-          <span className="text-sm font-semibold text-slate-800">AI Copilot</span>
+          <span className="text-sm font-semibold text-slate-800">AI Assistant</span>
         </div>
         <div className="flex items-center gap-2">
           {clientId && (
