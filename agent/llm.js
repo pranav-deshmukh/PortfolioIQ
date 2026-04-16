@@ -75,7 +75,7 @@ function messagesToGemini(messages) {
       try { parsed = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content; } catch { parsed = { result: msg.content }; }
       contents.push({
         role: "user",
-        parts: [{ functionResponse: { name: msg._toolName || "tool", response: parsed } }]
+        parts: [{ functionResponse: { name: msg._toolName || "tool", response: normalizeGeminiFunctionResponse(parsed) } }]
       });
       continue;
     }
@@ -85,6 +85,18 @@ function messagesToGemini(messages) {
   }
 
   return { systemInstruction, contents };
+}
+
+function normalizeGeminiFunctionResponse(value) {
+  if (Array.isArray(value)) {
+    return { result: value };
+  }
+
+  if (value && typeof value === "object") {
+    return value;
+  }
+
+  return { result: value };
 }
 
 /**
